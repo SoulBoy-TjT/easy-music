@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-electron/
+release/
+
+.idea/
+.vscode/
+
+*.log
+*.tmp
+*.local
+
+.env
+.env.*
+!.env.example

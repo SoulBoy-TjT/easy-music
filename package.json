@@ -1,0 +1,68 @@
+{
+  "name": "easy-music",
+  "version": "0.1.0",
+  "description": "Local artist album downloader with LX Music compatible download flow",
+  "main": "dist-electron/main/index.js",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "npm run build:main && npm run rebuild:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "test": "npm run rebuild:node && vitest run",
+    "test:raw": "vitest run",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit",
+    "build:main": "esbuild src/main/index.ts src/preload/index.ts --bundle --platform=node --format=cjs --outbase=src --outdir=dist-electron --entry-names=[dir]/[name] --external:electron --external:better-sqlite3 --external:node-id3 --external:image-size --external:ffmpeg-static",
+    "build:renderer": "vite build",
+    "build": "npm run typecheck && npm run build:main && npm run build:renderer",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "better-sqlite3": "^11.10.0",
+    "electron-log": "^5.4.1",
+    "image-size": "^2.0.2",
+    "node-id3": "^0.2.9",
+    "tunnel": "^0.0.6",
+    "vue": "^3.5.16"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.29",
+    "concurrently": "^9.2.0",
+    "cross-env": "^7.0.3",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.1",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "local.easy-music.album-downloader",
+    "productName": "Easy Music",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "assets/**/*",
+      "licenses/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/ffmpeg.exe",
+        "to": "ffmpeg.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "dir"
+      ]
+    }
+  }
+}
