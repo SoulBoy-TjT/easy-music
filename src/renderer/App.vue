@@ -251,6 +251,7 @@ async function deleteArtist(artist: string) {
 
 async function queueSongs(songIds: string[]) {
   if (!selectedPlaylistId.value) return
+  if (!await ensureDownloadRoot()) return
   const taskIds = await window.easyMusic.createDownloadTasks(selectedPlaylistId.value, songIds)
   if (taskIds.length) await window.easyMusic.startDownloads(taskIds)
   tasks.value = await window.easyMusic.listDownloadTasks()
@@ -258,12 +259,14 @@ async function queueSongs(songIds: string[]) {
 
 async function queuePlaylist() {
   if (!selectedPlaylistId.value) return
+  if (!await ensureDownloadRoot()) return
   const taskIds = await window.easyMusic.createDownloadTasks(selectedPlaylistId.value, [])
   if (taskIds.length) await window.easyMusic.startDownloads(taskIds)
   tasks.value = await window.easyMusic.listDownloadTasks()
 }
 
 async function startDownloads(ids: string[] = []) {
+  if (!await ensureDownloadRoot()) return
   await window.easyMusic.startDownloads(ids)
   tasks.value = await window.easyMusic.listDownloadTasks()
 }
@@ -302,6 +305,13 @@ async function removeAllTasks() {
 
 async function chooseRoot() {
   downloadRoot.value = await window.easyMusic.chooseDownloadRoot()
+}
+
+async function ensureDownloadRoot(): Promise<boolean> {
+  if (downloadRoot.value.trim()) return true
+  const selected = await window.easyMusic.chooseDownloadRoot()
+  downloadRoot.value = selected
+  return !!selected.trim()
 }
 
 async function saveSetting(key: string, value: string) {

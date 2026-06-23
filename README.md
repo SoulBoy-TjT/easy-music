@@ -44,7 +44,7 @@ release/win-unpacked/Easy Music.exe
 运行时数据保存在 Electron 的 `userData` 目录下：
 
 - `library.db`：歌单、歌曲、下载任务、音乐源、设置。
-- 下载文件：默认在 `用户音乐目录/Easy Music`，可在工具顶部修改。
+- 下载文件：默认目录为空，需要用户在工具顶部手动选择；选择后会记住该目录。
 
 ## 许可说明
 

@@ -1,4 +1,3 @@
-import os from 'node:os'
 import path from 'node:path'
 import { buildAlbumSongTreeModel } from './core/albumModel'
 import { DownloadManager } from './core/downloadManager'
@@ -168,6 +167,8 @@ export class AppServices {
   }
 
   startDownloads(ids: string[] = []): { started: boolean } {
+    const downloadRoot = this.getSetting('downloadRoot', '').trim()
+    if (!downloadRoot) throw new Error('请选择下载目录')
     if (ids.length) this.store.resetDownloadTasks(ids)
     else this.store.resetRetryableDownloadTasks()
     if (this.downloadRunning) return { started: false }
@@ -176,7 +177,7 @@ export class AppServices {
     const manager = new DownloadManager(
       this.store,
       resolver,
-      this.getSetting('downloadRoot', defaultDownloadRoot()),
+      downloadRoot,
       Number(this.getSetting('maxConcurrent', '3')) || 3,
     )
     this.currentDownloadManager = manager
@@ -264,7 +265,6 @@ export class AppServices {
 
   private ensureDefaults(): void {
     const defaults: Record<string, string> = {
-      downloadRoot: defaultDownloadRoot(),
       quality: 'flac24bit',
       maxConcurrent: '3',
       songViewMode: 'flat',
@@ -338,10 +338,6 @@ function normalizeRowCandidates(row: PlaylistSongRow): CandidateSource[] {
     return candidates
   }
   return [{ platform: row.song.platform, songId: row.song.platformSongId, qualitys: row.song.qualitys, song: row.song }, ...candidates]
-}
-
-function defaultDownloadRoot(): string {
-  return path.join(os.homedir(), 'Music', 'Easy Music')
 }
 
 function resolveSourceName(info: { name?: string; sources?: Record<string, unknown> }, script: string): string {

@@ -107,6 +107,18 @@ describe('app services download task creation', () => {
     }
   })
 
+  it('keeps the default download directory empty until the user chooses one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      expect(service.getSetting('downloadRoot')).toBe('')
+      expect(() => service.startDownloads()).toThrow('请选择下载目录')
+    } finally {
+      service.close()
+    }
+  })
+
   it('infers a readable source name for LX scripts without init name', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
     tempDirs.push(dir)

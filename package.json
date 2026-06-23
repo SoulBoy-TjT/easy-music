@@ -1,6 +1,6 @@
 {
   "name": "easy-music",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local artist album downloader with LX Music compatible download flow",
   "main": "dist-electron/main/index.js",
   "license": "Apache-2.0",
@@ -14,8 +14,8 @@
     "build:main": "esbuild src/main/index.ts src/preload/index.ts --bundle --platform=node --format=cjs --outbase=src --outdir=dist-electron --entry-names=[dir]/[name] --external:electron --external:better-sqlite3 --external:node-id3 --external:image-size --external:ffmpeg-static",
     "build:renderer": "vite build",
     "build": "npm run typecheck && npm run build:main && npm run build:renderer",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "pack": "npm run build && npm run rebuild:electron && electron-builder --dir",
+    "dist": "npm run build && npm run rebuild:electron && electron-builder"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
@@ -64,6 +64,16 @@
         "nsis",
         "dir"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Easy Music",
+      "artifactName": "Easy-Music-Setup-${version}.${ext}",
+      "include": "build/installer.nsh"
     }
   }
 }
