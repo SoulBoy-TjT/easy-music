@@ -7,6 +7,10 @@ let services: AppServices | null = null
 let tray: Tray | null = null
 let isQuitting = false
 
+function assetPath(name: string): string {
+  return path.join(app.getAppPath(), 'assets', name)
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1220,
@@ -14,6 +18,7 @@ function createWindow(): BrowserWindow {
     minWidth: 980,
     minHeight: 680,
     title: 'Easy Music',
+    icon: assetPath('icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -38,7 +43,8 @@ function createWindow(): BrowserWindow {
 }
 
 function createTray(): void {
-  tray = new Tray(nativeImage.createEmpty())
+  const image = nativeImage.createFromPath(assetPath('icon.png')).resize({ width: 16, height: 16 })
+  tray = new Tray(image)
   tray.setToolTip('Easy Music')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => mainWindow?.show() },

@@ -35,6 +35,78 @@ describe('app services download task creation', () => {
     }
   })
 
+  it('lists songs in the same order as the album tree', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [
+          album('kw', '2024-02-01', ['Second'], 'Later Album'),
+          album('kw', '2024-01-01', ['First B', 'First A'], 'Earlier Album'),
+        ],
+        kg: [],
+        tx: [],
+        wy: [],
+      })
+      const kuwo = service.listPlaylists().find((playlist) => playlist.platform === 'kw')!
+
+      const result = service.listPlaylistSongs(kuwo.id)
+      const albumSongIds = result.albums.flatMap((albumNode) => albumNode.children.map((child) => child.songId))
+
+      expect(result.albums.map((albumNode) => albumNode.albumName)).toEqual(['Earlier Album', 'Later Album'])
+      expect(result.rows.map((row) => row.id)).toEqual(albumSongIds)
+      expect(result.rows.map((row) => row.song.title)).toEqual(['First B', 'First A', 'Second'])
+    } finally {
+      service.close()
+    }
+  })
+
+  it('does not append hidden deduped total-playlist songs to the flat list', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [],
+        kg: [album('kg', '2024-07-10', ['A', 'B'], 'Live Part')],
+        tx: [album('tx', '2024-07-10', ['A', 'B', 'C'], 'Live Full')],
+        wy: [],
+      })
+      const total = service.listPlaylists().find((playlist) => playlist.kind === 'total')!
+
+      const result = service.listPlaylistSongs(total.id)
+      const albumSongIds = result.albums.flatMap((albumNode) => albumNode.children.map((child) => child.songId))
+
+      expect(result.rows.map((row) => row.id)).toEqual(albumSongIds)
+      expect(result.rows.map((row) => row.song.title)).toEqual(['A', 'B', 'C'])
+      expect(result.rows.every((row) => row.song.platform === 'tx')).toBe(true)
+    } finally {
+      service.close()
+    }
+  })
+
+  it('uses flac24bit as the default download quality for new settings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [album('kw', '2024-01-01', ['Song'])],
+        kg: [],
+        tx: [],
+        wy: [],
+      })
+      const kuwo = service.listPlaylists().find((playlist) => playlist.platform === 'kw')!
+
+      service.createDownloadTasks(kuwo.id, [])
+
+      expect(service.store.listDownloadTasks().map((task) => task.quality)).toEqual(['flac24bit'])
+    } finally {
+      service.close()
+    }
+  })
+
   it('infers a readable source name for LX scripts without init name', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
     tempDirs.push(dir)
@@ -100,7 +172,7 @@ function album(platform: string, publishDate: string, titles: string[], albumNam
 
 function song(platform: string, title: string, publishDate: string, trackNo: number, albumSongCount: number, albumName: string): Song {
   return {
-    id: `${platform}:${trackNo}`,
+    id: `${platform}:${albumName}:${trackNo}`,
     platform,
     platformSongId: `${platform}-${trackNo}`,
     title,

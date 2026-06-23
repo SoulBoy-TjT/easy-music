@@ -102,9 +102,10 @@ export class AppServices {
     const playlist = this.store.getPlaylist(playlistId)
     if (!playlist) throw new Error('歌单不存在')
     const rows = this.store.listPlaylistSongs(playlistId)
+    const albums = buildAlbumSongTreeModel(rows, { totalPlaylist: playlist.kind === 'total' })
     return {
-      rows,
-      albums: buildAlbumSongTreeModel(rows, { totalPlaylist: playlist.kind === 'total' }),
+      rows: orderRowsByAlbumTree(rows, albums),
+      albums,
     }
   }
 
@@ -126,7 +127,7 @@ export class AppServices {
   createDownloadTasks(playlistId: string, songIds: string[] = []): string[] {
     const playlist = this.store.getPlaylist(playlistId)
     if (!playlist) throw new Error('歌单不存在')
-    const quality = this.getSetting('quality', 'flac') as Quality
+    const quality = this.getSetting('quality', 'flac24bit') as Quality
     const rows = this.getDownloadRows(playlist, songIds)
     const taskIds: string[] = []
     for (const row of rows) {
@@ -264,7 +265,7 @@ export class AppServices {
   private ensureDefaults(): void {
     const defaults: Record<string, string> = {
       downloadRoot: defaultDownloadRoot(),
-      quality: 'flac',
+      quality: 'flac24bit',
       maxConcurrent: '3',
       songViewMode: 'flat',
       embedCover: 'true',
@@ -311,6 +312,22 @@ function prepareDownloadSong(row: PlaylistSongRow): Song {
       downloadCandidates: candidates,
     },
   }
+}
+
+function orderRowsByAlbumTree(
+  rows: PlaylistSongRow[],
+  albums: ReturnType<typeof buildAlbumSongTreeModel>,
+): PlaylistSongRow[] {
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const orderedRows: PlaylistSongRow[] = []
+  for (const album of albums) {
+    for (const child of album.children) {
+      const row = byId.get(child.songId)
+      if (!row) continue
+      orderedRows.push(row)
+    }
+  }
+  return orderedRows
 }
 
 function normalizeRowCandidates(row: PlaylistSongRow): CandidateSource[] {

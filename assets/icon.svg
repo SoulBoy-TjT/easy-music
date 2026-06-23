@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Easy Music icon">
+  <defs>
+    <linearGradient id="bg" x1="38" y1="22" x2="218" y2="234" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2458a7"/>
+      <stop offset="1" stop-color="#162033"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="70" y1="64" x2="184" y2="198" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35c4ba"/>
+      <stop offset="1" stop-color="#0f8f86"/>
+    </linearGradient>
+  </defs>
+  <rect x="18" y="18" width="220" height="220" rx="48" fill="url(#bg)"/>
+  <path d="M88 68h68v88c0 23-18 40-43 40-22 0-39-13-39-31s17-31 39-31c8 0 15 2 21 5V96h-46V68Z" fill="#ffffff"/>
+  <path d="M159 112h22v34h20l-31 34-31-34h20v-34Z" fill="url(#accent)"/>
+  <path d="M78 208h104" fill="none" stroke="#35c4ba" stroke-width="13" stroke-linecap="round"/>
+</svg>

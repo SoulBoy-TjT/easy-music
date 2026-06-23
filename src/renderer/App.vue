@@ -102,7 +102,7 @@ const selectedPlaylist = computed(() => playlists.value.find((item) => item.id =
 const expandedArtists = ref(new Set<string>())
 const songViewMode = ref<'flat' | 'album'>('flat')
 const downloadRoot = ref('')
-const quality = ref('flac')
+const quality = ref('flac24bit')
 const maxConcurrent = ref('3')
 const showFailedOnly = ref(false)
 const activePage = ref<PageKey>('albums')
@@ -112,6 +112,7 @@ const convertBitrate = ref('320k')
 const convertOverwrite = ref(false)
 const progressText = ref('等待抓取')
 const progressValue = ref(0)
+const progressTone = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
 const fetching = ref(false)
 const contextMenu = ref<{ visible: boolean; x: number; y: number; items: MenuItem[] }>({ visible: false, x: 0, y: 0, items: [] })
 const mergedAlbumAudit = ref<AlbumNode | null>(null)
@@ -132,11 +133,18 @@ const playlistGroups = computed(() => {
 })
 
 const visibleTasks = computed(() => showFailedOnly.value ? tasks.value.filter((task) => task.status === 'failed') : tasks.value)
+const progressStateClass = computed(() => `is-${progressTone.value}`)
+const emptySongMessage = computed(() => selectedPlaylist.value ? '当前歌单暂无歌曲。' : '请选择左侧歌单查看歌曲。')
+const emptyAlbumMessage = computed(() => selectedPlaylist.value ? '当前歌单暂无专辑分组。' : '请选择左侧歌单查看专辑。')
+const emptyVisibleTasksMessage = computed(() => showFailedOnly.value ? '当前没有失败任务。' : '还没有下载任务。')
 
 onMounted(async () => {
   unsubscribeProgress = window.easyMusic.onFetchProgress((progress) => {
     progressText.value = progress.error ? `${progress.message}：${progress.error}` : progress.message
     if (progress.total && progress.current != null) progressValue.value = Math.round((progress.current / progress.total) * 100)
+    if (progress.error) progressTone.value = 'error'
+    else if (progress.total && progress.current != null && progress.current >= progress.total) progressTone.value = 'success'
+    else progressTone.value = 'loading'
   })
   document.addEventListener('click', hideMenu)
   await loadSettings()
@@ -152,7 +160,7 @@ onBeforeUnmount(() => {
 
 async function loadSettings() {
   downloadRoot.value = await window.easyMusic.getSetting('downloadRoot', '')
-  quality.value = await window.easyMusic.getSetting('quality', 'flac')
+  quality.value = await window.easyMusic.getSetting('quality', 'flac24bit')
   maxConcurrent.value = await window.easyMusic.getSetting('maxConcurrent', '3')
   songViewMode.value = await window.easyMusic.getSetting('songViewMode', 'flat') as 'flat' | 'album'
   activePage.value = await window.easyMusic.getSetting('activePage', 'albums') as PageKey
@@ -188,13 +196,16 @@ async function fetchAlbums() {
   fetching.value = true
   progressText.value = '开始抓取'
   progressValue.value = 0
+  progressTone.value = 'loading'
   try {
     const result = await window.easyMusic.fetchArtistAlbums(artistName.value.trim())
     playlists.value = result.playlists
     progressText.value = '抓取完成'
     progressValue.value = 100
+    progressTone.value = 'success'
   } catch (error) {
     progressText.value = error instanceof Error ? error.message : String(error)
+    progressTone.value = 'error'
   } finally {
     fetching.value = false
   }
@@ -455,6 +466,15 @@ function formatBytes(value: number): string {
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${value} B`
 }
+
+function statusClass(status: string): string {
+  const normalized = status.toLowerCase()
+  if (normalized.includes('fail') || normalized.includes('error')) return 'is-failed'
+  if (normalized.includes('download') || normalized.includes('running') || normalized.includes('convert')) return 'is-running'
+  if (normalized.includes('complete') || normalized.includes('success') || normalized.includes('done')) return 'is-complete'
+  if (normalized.includes('pause') || normalized.includes('cancel')) return 'is-muted'
+  return 'is-pending'
+}
 </script>
 
 <template>
@@ -469,31 +489,43 @@ function formatBytes(value: number): string {
     <header v-if="activePage === 'albums'" class="topbar">
       <div class="artist-search">
         <input v-model="artistName" class="text-input artist-input" placeholder="输入歌手名" @keyup.enter="fetchAlbums" />
-        <button class="primary-button" :disabled="fetching" @click="fetchAlbums">{{ fetching ? '抓取中' : '抓取专辑' }}</button>
+        <button class="primary-button" :aria-busy="fetching" :disabled="fetching" @click="fetchAlbums">{{ fetching ? '抓取中' : '抓取专辑' }}</button>
       </div>
       <div class="settings-line">
-        <input v-model="downloadRoot" class="text-input path-input" readonly />
-        <button @click="chooseRoot">选择目录</button>
-        <select v-model="quality" @change="saveSetting('quality', quality)">
-          <option value="flac24bit">flac24bit</option>
-          <option value="flac">flac</option>
-          <option value="320k">320k</option>
-          <option value="128k">128k</option>
-        </select>
-        <label class="compact-label">并发</label>
-        <input v-model="maxConcurrent" class="number-input" type="number" min="1" max="10" @change="saveSetting('maxConcurrent', maxConcurrent)" />
+        <label class="settings-field settings-path-field">
+          <span class="setting-label">下载目录</span>
+          <input v-model="downloadRoot" class="text-input path-input" readonly />
+          <button class="directory-button" @click="chooseRoot">选择目录</button>
+        </label>
+        <label class="settings-field settings-quality-field">
+          <span class="setting-label">音质</span>
+          <select v-model="quality" @change="saveSetting('quality', quality)">
+            <option value="flac24bit">flac24bit</option>
+            <option value="flac">flac</option>
+            <option value="320k">320k</option>
+            <option value="128k">128k</option>
+          </select>
+        </label>
+        <label class="settings-field settings-number-field">
+          <span class="setting-label">并发</span>
+          <input v-model="maxConcurrent" class="number-input" type="number" min="1" max="10" @change="saveSetting('maxConcurrent', maxConcurrent)" />
+        </label>
       </div>
     </header>
 
-    <div v-if="activePage === 'albums'" class="progress-line">
+    <div v-if="activePage === 'albums'" class="progress-line" :class="progressStateClass">
       <progress :value="progressValue" max="100"></progress>
-      <span>{{ progressText }}</span>
+      <span class="progress-text">{{ progressText }}</span>
     </div>
 
     <section v-if="activePage === 'albums'" class="workspace">
       <aside class="playlist-pane">
         <div class="pane-title">歌单</div>
         <div class="playlist-tree">
+          <div v-if="!playlists.length" class="empty-state empty-state--compact">
+            <strong>还没有歌单</strong>
+            <span>输入歌手名后抓取专辑。</span>
+          </div>
           <div v-for="group in playlistGroups" :key="group.artist" class="artist-group">
             <button class="artist-node" @click="toggleArtist(group.artist)" @contextmenu="showArtistMenu($event, group.artist)">
               <span>{{ expandedArtists.has(group.artist) ? '▾' : '▸' }}</span>
@@ -539,39 +571,55 @@ function formatBytes(value: number): string {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in rows" :key="row.id" @contextmenu="showSongMenu($event, row.id)">
-                <td>{{ row.song.title }}</td>
-                <td>{{ row.song.artist }}</td>
-                <td>{{ row.song.albumName }}</td>
-                <td>{{ platformLabel(row.song.platform) }}</td>
-                <td>{{ formatDuration(row.song.duration) }}</td>
+              <template v-if="rows.length">
+                <tr v-for="row in rows" :key="row.id" @contextmenu="showSongMenu($event, row.id)">
+                  <td>{{ row.song.title }}</td>
+                  <td>{{ row.song.artist }}</td>
+                  <td>{{ row.song.albumName }}</td>
+                  <td>{{ platformLabel(row.song.platform) }}</td>
+                  <td>{{ formatDuration(row.song.duration) }}</td>
+                </tr>
+              </template>
+              <tr v-else class="empty-table-row">
+                <td colspan="5">
+                  <div class="empty-state empty-state--table">
+                    <strong>暂无歌曲</strong>
+                    <span>{{ emptySongMessage }}</span>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div v-else class="album-tree">
-          <details v-for="album in albums" :key="album.id" class="album-node" @contextmenu.prevent="showAlbumMenu($event, album)">
-            <summary class="album-summary">
-              <span>{{ album.title }}</span>
+          <template v-if="albums.length">
+            <details v-for="album in albums" :key="album.id" class="album-node" @contextmenu.prevent="showAlbumMenu($event, album)">
+              <summary class="album-summary">
+                <span>{{ album.title }}</span>
+                <button
+                  v-if="album.mergedAlbums.length"
+                  type="button"
+                  class="merge-audit-button"
+                  @click.stop.prevent="showMergedAlbumAudit(album)"
+                >
+                  已合并 {{ album.mergedAlbums.length }} 项
+                </button>
+              </summary>
               <button
-                v-if="album.mergedAlbums.length"
-                type="button"
-                class="merge-audit-button"
-                @click.stop.prevent="showMergedAlbumAudit(album)"
+                v-for="child in album.children"
+                :key="child.id"
+                class="album-song-node"
+                @contextmenu.stop="showSongMenu($event, child.songId)"
               >
-                已合并 {{ album.mergedAlbums.length }} 项
+                {{ child.title }}
               </button>
-            </summary>
-            <button
-              v-for="child in album.children"
-              :key="child.id"
-              class="album-song-node"
-              @contextmenu.stop="showSongMenu($event, child.songId)"
-            >
-              {{ child.title }}
-            </button>
-          </details>
+            </details>
+          </template>
+          <div v-else class="empty-state">
+            <strong>暂无专辑</strong>
+            <span>{{ emptyAlbumMessage }}</span>
+          </div>
         </div>
       </section>
     </section>
@@ -602,12 +650,22 @@ function formatBytes(value: number): string {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="task in visibleTasks" :key="task.id" @contextmenu="showTaskMenu($event, task)">
+              <template v-if="visibleTasks.length">
+              <tr v-for="task in visibleTasks" :key="task.id" :class="{ 'is-failed-row': task.status === 'failed' }" @contextmenu="showTaskMenu($event, task)">
                 <td>{{ task.song.title }} <span class="platform-tag">{{ platformLabel(task.song.platform) }}</span></td>
-                <td>{{ task.statusText }}</td>
+                <td><span class="status-pill" :class="statusClass(task.status)">{{ task.statusText }}</span></td>
                 <td>{{ task.speed }}</td>
                 <td>{{ formatBytes(task.downloaded) }} / {{ formatBytes(task.total) }}</td>
                 <td class="task-error-cell" :title="task.error" @click.stop="showTaskError(task.error)">{{ task.error }}</td>
+              </tr>
+              </template>
+              <tr v-else class="empty-table-row">
+                <td colspan="5">
+                  <div class="empty-state empty-state--table">
+                    <strong>暂无任务</strong>
+                    <span>{{ emptyVisibleTasksMessage }}</span>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -625,6 +683,10 @@ function formatBytes(value: number): string {
           </label>
         </div>
         <div class="source-list">
+          <div v-if="!sources.length" class="empty-state">
+            <strong>还没有音乐源</strong>
+            <span>导入 LX 音乐源脚本后可在这里测试和启用。</span>
+          </div>
           <div v-for="source in sources" :key="source.id" class="source-row">
             <div>
               <strong>{{ source.name }}</strong>
@@ -686,12 +748,22 @@ function formatBytes(value: number): string {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="task in convertTasks" :key="task.id">
+              <template v-if="convertTasks.length">
+              <tr v-for="task in convertTasks" :key="task.id" :class="{ 'is-failed-row': task.status === 'failed' }">
                 <td :title="task.sourcePath">{{ task.sourcePath }}</td>
                 <td :title="task.outputPath">{{ task.outputPath }}</td>
-                <td>{{ task.statusText }}</td>
+                <td><span class="status-pill" :class="statusClass(task.status)">{{ task.statusText }}</span></td>
                 <td>{{ task.progress }}%</td>
                 <td class="task-error-cell" :title="task.error">{{ task.error }}</td>
+              </tr>
+              </template>
+              <tr v-else class="empty-table-row">
+                <td colspan="5">
+                  <div class="empty-state empty-state--table">
+                    <strong>暂无转换任务</strong>
+                    <span>选择来源目录和输出目录后开始转换。</span>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
