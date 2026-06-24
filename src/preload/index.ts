@@ -22,10 +22,11 @@ const api = {
   removeAllDownloadTasks: () => ipcRenderer.invoke('download:removeAll'),
   listDownloadTasks: () => ipcRenderer.invoke('download:list'),
 
-  scanFlacConversions: (sourceDir: string, outputDir: string) => ipcRenderer.invoke('convert:scan', { sourceDir, outputDir }),
-  startFlacConversions: (payload: { sourceDir: string; outputDir: string; bitrate: string; overwrite?: boolean }) => ipcRenderer.invoke('convert:start', payload),
+  scanFlacConversions: (sourceDir: string) => ipcRenderer.invoke('convert:scan', { sourceDir }),
+  startFlacConversions: (payload: { sourceDir: string; bitrate: string; overwrite?: boolean }) => ipcRenderer.invoke('convert:start', payload),
   cancelFlacConversions: () => ipcRenderer.invoke('convert:cancel'),
   listFlacConversions: () => ipcRenderer.invoke('convert:list'),
+  getFlacConversionResult: () => ipcRenderer.invoke('convert:result'),
 
   importSource: (script: string) => ipcRenderer.invoke('source:import', script),
   listSources: () => ipcRenderer.invoke('source:list'),

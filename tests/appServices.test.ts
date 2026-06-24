@@ -107,6 +107,63 @@ describe('app services download task creation', () => {
     }
   })
 
+  it('queues selected songs in album tree order instead of selection order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [
+          album('kw', '2024-02-01', ['Later'], 'Later Album'),
+          album('kw', '2024-01-01', ['Earlier B', 'Earlier A'], 'Earlier Album'),
+        ],
+        kg: [],
+        tx: [],
+        wy: [],
+      })
+      const kuwo = service.listPlaylists().find((playlist) => playlist.platform === 'kw')!
+      const result = service.listPlaylistSongs(kuwo.id)
+      const selectedIds = [...result.rows].reverse().map((row) => row.id)
+
+      service.createDownloadTasks(kuwo.id, selectedIds)
+
+      expect(service.store.listDownloadTasks().map((task) => task.song.title)).toEqual(['Earlier B', 'Earlier A', 'Later'])
+    } finally {
+      service.close()
+    }
+  })
+
+  it('updates playlist song and album counts after removing songs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [
+          album('kw', '2024-02-01', ['Later'], 'Later Album'),
+          album('kw', '2024-01-01', ['Earlier B', 'Earlier A'], 'Earlier Album'),
+        ],
+        kg: [],
+        tx: [],
+        wy: [],
+      })
+      const kuwo = service.listPlaylists().find((playlist) => playlist.platform === 'kw')!
+      const initial = service.listPlaylists().find((playlist) => playlist.id === kuwo.id)!
+      const earlierSongIds = service.listPlaylistSongs(kuwo.id)
+        .rows
+        .filter((row) => row.song.albumName === 'Earlier Album')
+        .map((row) => row.id)
+
+      service.removeSongsFromPlaylist(kuwo.id, earlierSongIds)
+
+      const updated = service.listPlaylists().find((playlist) => playlist.id === kuwo.id)!
+      expect(initial).toMatchObject({ songCount: 3, albumCount: 2 })
+      expect(updated).toMatchObject({ songCount: 1, albumCount: 1 })
+    } finally {
+      service.close()
+    }
+  })
+
   it('keeps the default download directory empty until the user chooses one', () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
     tempDirs.push(dir)

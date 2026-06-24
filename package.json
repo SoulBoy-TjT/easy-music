@@ -1,6 +1,6 @@
 {
   "name": "easy-music",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local artist album downloader with LX Music compatible download flow",
   "main": "dist-electron/main/index.js",
   "license": "Apache-2.0",

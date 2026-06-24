@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 interface PlaylistSummary {
   id: string
@@ -76,10 +76,18 @@ interface ConvertTask {
   id: string
   sourcePath: string
   outputPath: string
+  kind: 'flac_to_mp3' | 'copy_mp3'
   status: string
   statusText: string
   progress: number
   error: string
+}
+
+interface ConvertResult {
+  outputDir: string
+  finalOutputDir: string
+  albumCountWarnings: string[]
+  tasks: ConvertTask[]
 }
 
 interface MenuItem {
@@ -105,11 +113,14 @@ const downloadRoot = ref('')
 const quality = ref('flac24bit')
 const maxConcurrent = ref('3')
 const showFailedOnly = ref(false)
+const retryingFailedTaskIds = ref(new Set<string>())
 const activePage = ref<PageKey>('albums')
 const convertSourceDir = ref('')
 const convertOutputDir = ref('')
 const convertBitrate = ref('320k')
 const convertOverwrite = ref(false)
+const convertFinalOutputDir = ref('')
+const convertAlbumCountWarnings = ref<string[]>([])
 const progressText = ref('等待抓取')
 const progressValue = ref(0)
 const progressTone = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -132,7 +143,9 @@ const playlistGroups = computed(() => {
   }))
 })
 
-const visibleTasks = computed(() => showFailedOnly.value ? tasks.value.filter((task) => task.status === 'failed') : tasks.value)
+const visibleTasks = computed(() => showFailedOnly.value
+  ? tasks.value.filter((task) => task.status === 'failed' || (retryingFailedTaskIds.value.has(task.id) && task.status !== 'success'))
+  : tasks.value)
 const progressStateClass = computed(() => `is-${progressTone.value}`)
 const emptySongMessage = computed(() => selectedPlaylist.value ? '当前歌单暂无歌曲。' : '请选择左侧歌单查看歌曲。')
 const emptyAlbumMessage = computed(() => selectedPlaylist.value ? '当前歌单暂无专辑分组。' : '请选择左侧歌单查看专辑。')
@@ -158,6 +171,14 @@ onBeforeUnmount(() => {
   if (taskTimer) window.clearInterval(taskTimer)
 })
 
+watch(tasks, () => {
+  pruneRetryingFailedTaskIds()
+})
+
+watch(showFailedOnly, (enabled) => {
+  if (!enabled) retryingFailedTaskIds.value = new Set()
+})
+
 async function loadSettings() {
   downloadRoot.value = await window.easyMusic.getSetting('downloadRoot', '')
   quality.value = await window.easyMusic.getSetting('quality', 'flac24bit')
@@ -165,30 +186,30 @@ async function loadSettings() {
   songViewMode.value = await window.easyMusic.getSetting('songViewMode', 'flat') as 'flat' | 'album'
   activePage.value = await window.easyMusic.getSetting('activePage', 'albums') as PageKey
   convertSourceDir.value = await window.easyMusic.getSetting('convertSourceDir', '')
-  convertOutputDir.value = await window.easyMusic.getSetting('convertOutputDir', '')
   convertBitrate.value = await window.easyMusic.getSetting('convertBitrate', '320k')
   convertOverwrite.value = await window.easyMusic.getSetting('convertOverwrite', 'false') === 'true'
 }
 
 async function refreshAll() {
   playlists.value = await window.easyMusic.listPlaylists()
-  tasks.value = await window.easyMusic.listDownloadTasks()
+  setDownloadTasks(await window.easyMusic.listDownloadTasks())
   sources.value = await window.easyMusic.listSources()
   convertTasks.value = await window.easyMusic.listFlacConversions()
+  await refreshConvertResult()
   if (selectedPlaylistId.value) await selectPlaylist(selectedPlaylistId.value)
 }
 
 async function refreshLiveData() {
-  tasks.value = await window.easyMusic.listDownloadTasks()
-  if (activePage.value === 'converter') convertTasks.value = await window.easyMusic.listFlacConversions()
+  setDownloadTasks(await window.easyMusic.listDownloadTasks())
+  if (activePage.value === 'converter') await refreshConvertResult()
 }
 
 async function switchPage(page: PageKey) {
   activePage.value = page
   await saveSetting('activePage', page)
-  if (page === 'downloads') tasks.value = await window.easyMusic.listDownloadTasks()
+  if (page === 'downloads') setDownloadTasks(await window.easyMusic.listDownloadTasks())
   if (page === 'sources') sources.value = await window.easyMusic.listSources()
-  if (page === 'converter') convertTasks.value = await window.easyMusic.listFlacConversions()
+  if (page === 'converter') await refreshConvertResult()
 }
 
 async function fetchAlbums() {
@@ -252,9 +273,10 @@ async function deleteArtist(artist: string) {
 async function queueSongs(songIds: string[]) {
   if (!selectedPlaylistId.value) return
   if (!await ensureDownloadRoot()) return
-  const taskIds = await window.easyMusic.createDownloadTasks(selectedPlaylistId.value, songIds)
+  const plainSongIds = Array.from(songIds)
+  const taskIds = await window.easyMusic.createDownloadTasks(selectedPlaylistId.value, plainSongIds)
   if (taskIds.length) await window.easyMusic.startDownloads(taskIds)
-  tasks.value = await window.easyMusic.listDownloadTasks()
+  setDownloadTasks(await window.easyMusic.listDownloadTasks())
 }
 
 async function queuePlaylist() {
@@ -262,45 +284,58 @@ async function queuePlaylist() {
   if (!await ensureDownloadRoot()) return
   const taskIds = await window.easyMusic.createDownloadTasks(selectedPlaylistId.value, [])
   if (taskIds.length) await window.easyMusic.startDownloads(taskIds)
-  tasks.value = await window.easyMusic.listDownloadTasks()
+  setDownloadTasks(await window.easyMusic.listDownloadTasks())
 }
 
 async function startDownloads(ids: string[] = []) {
   if (!await ensureDownloadRoot()) return
   await window.easyMusic.startDownloads(ids)
-  tasks.value = await window.easyMusic.listDownloadTasks()
+  setDownloadTasks(await window.easyMusic.listDownloadTasks())
 }
 
 async function startVisibleDownloads() {
   if (showFailedOnly.value) {
     const failedIds = visibleTasks.value.filter((task) => task.status === 'failed').map((task) => task.id)
-    if (failedIds.length) await startDownloads(failedIds)
+    if (!failedIds.length || !await ensureDownloadRoot()) return
+    addRetryingFailedTaskIds(failedIds)
+    await window.easyMusic.startDownloads(failedIds)
+    setDownloadTasks(await window.easyMusic.listDownloadTasks())
     return
   }
   await startDownloads()
 }
 
 async function pauseDownloads() {
-  tasks.value = await window.easyMusic.pauseDownloads()
+  setDownloadTasks(await window.easyMusic.pauseDownloads())
 }
 
 async function deleteSong(songIds: string[]) {
   if (!selectedPlaylistId.value) return
   if (!confirm('从当前歌单移除选中的歌曲？不会删除本地文件。')) return
-  const result = await window.easyMusic.removeSongsFromPlaylist(selectedPlaylistId.value, songIds)
-  rows.value = result.rows
-  albums.value = result.albums
-  playlists.value = await window.easyMusic.listPlaylists()
+  const plainSongIds = Array.from(songIds)
+  try {
+    await window.easyMusic.removeSongsFromPlaylist(selectedPlaylistId.value, plainSongIds)
+    const result = await window.easyMusic.listPlaylistSongs(selectedPlaylistId.value)
+    playlists.value = await window.easyMusic.listPlaylists()
+    rows.value = result.rows
+    albums.value = result.albums
+  } catch (error) {
+    alert(error instanceof Error ? error.message : String(error))
+    playlists.value = await window.easyMusic.listPlaylists()
+    await selectPlaylist(selectedPlaylistId.value)
+  }
 }
 
 async function removeTask(id: string) {
   if (!confirm('删除该下载任务？只删除下载记录，不删除本地文件。')) return
-  tasks.value = await window.easyMusic.removeDownloadTasks([id])
+  removeRetryingFailedTaskIds([id])
+  setDownloadTasks(await window.easyMusic.removeDownloadTasks([id]))
 }
 
 async function removeAllTasks() {
   if (!confirm('删除全部下载任务？只删除下载记录，不删除本地文件。')) return
-  tasks.value = await window.easyMusic.removeAllDownloadTasks()
+  retryingFailedTaskIds.value = new Set()
+  setDownloadTasks(await window.easyMusic.removeAllDownloadTasks())
 }
 
 async function chooseRoot() {
@@ -325,28 +360,55 @@ async function chooseConvertSourceDir() {
   await saveSetting('convertSourceDir', selected)
 }
 
-async function chooseConvertOutputDir() {
-  const selected = await window.easyMusic.chooseDirectory('选择 MP3 输出目录')
-  if (!selected) return
-  convertOutputDir.value = selected
-  await saveSetting('convertOutputDir', selected)
-}
-
 async function startFlacConversions() {
-  if (!convertSourceDir.value || !convertOutputDir.value) return
+  if (!convertSourceDir.value) return
   await saveSetting('convertBitrate', convertBitrate.value)
   await saveSetting('convertOverwrite', String(convertOverwrite.value))
   const result = await window.easyMusic.startFlacConversions({
     sourceDir: convertSourceDir.value,
-    outputDir: convertOutputDir.value,
     bitrate: convertBitrate.value,
     overwrite: convertOverwrite.value,
   })
-  convertTasks.value = result.tasks
+  applyConvertResult(result)
 }
 
 async function cancelFlacConversions() {
   convertTasks.value = await window.easyMusic.cancelFlacConversions()
+}
+
+async function refreshConvertResult() {
+  applyConvertResult(await window.easyMusic.getFlacConversionResult())
+}
+
+function applyConvertResult(result: ConvertResult) {
+  convertOutputDir.value = result.outputDir
+  convertFinalOutputDir.value = result.finalOutputDir
+  convertAlbumCountWarnings.value = result.albumCountWarnings || []
+  convertTasks.value = result.tasks || []
+}
+
+function setDownloadTasks(nextTasks: DownloadTask[]) {
+  tasks.value = nextTasks
+  pruneRetryingFailedTaskIds()
+}
+
+function addRetryingFailedTaskIds(ids: string[]) {
+  retryingFailedTaskIds.value = new Set([...retryingFailedTaskIds.value, ...ids])
+}
+
+function removeRetryingFailedTaskIds(ids: string[]) {
+  const next = new Set(retryingFailedTaskIds.value)
+  for (const id of ids) next.delete(id)
+  retryingFailedTaskIds.value = next
+}
+
+function pruneRetryingFailedTaskIds() {
+  if (!retryingFailedTaskIds.value.size) return
+  const retryableIds = new Set(tasks.value
+    .filter((task) => task.status !== 'success')
+    .map((task) => task.id))
+  const next = new Set(Array.from(retryingFailedTaskIds.value).filter((id) => retryableIds.has(id)))
+  if (next.size !== retryingFailedTaskIds.value.size) retryingFailedTaskIds.value = next
 }
 
 async function importSource(event: Event) {
@@ -729,8 +791,7 @@ function statusClass(status: string): string {
           </label>
           <label>
             <span>MP3 输出目录</span>
-            <input v-model="convertOutputDir" class="text-input path-input" readonly />
-            <button @click="chooseConvertOutputDir">选择</button>
+            <input :value="convertFinalOutputDir || convertOutputDir || '输出目录将自动创建在源目录同级'" class="text-input path-input" readonly />
           </label>
           <label>
             <span>码率</span>
@@ -745,6 +806,10 @@ function statusClass(status: string): string {
             <input v-model="convertOverwrite" type="checkbox" @change="saveSetting('convertOverwrite', String(convertOverwrite))" />
             覆盖已存在 MP3
           </label>
+        </div>
+        <div v-if="convertAlbumCountWarnings.length" class="converter-warnings">
+          <strong>专辑曲目数提示</strong>
+          <span v-for="warning in convertAlbumCountWarnings" :key="warning">{{ warning }}</span>
         </div>
         <div class="table-wrap converter-wrap">
           <table class="data-table">
@@ -771,7 +836,7 @@ function statusClass(status: string): string {
                 <td colspan="5">
                   <div class="empty-state empty-state--table">
                     <strong>暂无转换任务</strong>
-                    <span>选择来源目录和输出目录后开始转换。</span>
+                    <span>选择来源目录后开始转换</span>
                   </div>
                 </td>
               </tr>

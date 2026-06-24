@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { buildAlbumSongTreeModel } from './core/albumModel'
 import { DownloadManager } from './core/downloadManager'
-import { FlacConverter, type ConvertOptions, type ConvertTask } from './core/flacConverter'
+import { FlacConverter, type ConvertOptions, type ConvertResult, type ConvertTask } from './core/flacConverter'
 import { LibraryStore } from './core/libraryStore'
 import { LxSourceBridge } from './core/sourceBridge'
 import { fetchArtistPlatformAlbums, searchPlatformSongs, type FetchProgress, type ProgressCallback } from './platforms'
@@ -35,7 +35,7 @@ export class AppServices {
   private downloadRunning = false
   private currentDownloadManager: DownloadManager | null = null
   private readonly flacConverter = new FlacConverter()
-  private convertRunning: Promise<ConvertTask[]> | null = null
+  private convertRunning: Promise<ConvertResult> | null = null
 
   constructor(userDataPath: string) {
     this.store = new LibraryStore(path.join(userDataPath, 'library.db'))
@@ -118,9 +118,11 @@ export class AppServices {
     return this.listPlaylists()
   }
 
-  removeSongsFromPlaylist(playlistId: string, songIds: string[]): PlaylistSongsResult {
-    this.store.removeSongsFromPlaylist(playlistId, songIds)
-    return this.listPlaylistSongs(playlistId)
+  removeSongsFromPlaylist(playlistId: string, songIds: string[]): void {
+    const uniqueSongIds = Array.from(new Set(songIds.filter(Boolean)))
+    if (!uniqueSongIds.length) return
+    const removed = this.store.removeSongsFromPlaylist(playlistId, uniqueSongIds)
+    if (!removed) throw new Error('未找到可删除的歌曲，请刷新歌单后重试')
   }
 
   createDownloadTasks(playlistId: string, songIds: string[] = []): string[] {
@@ -139,14 +141,13 @@ export class AppServices {
   private getDownloadRows(playlist: Playlist, songIds: string[]): PlaylistSongRow[] {
     const selected = new Set(songIds)
     const rows = this.store.listPlaylistSongs(playlist.id)
-    if (selected.size) return rows.filter((row) => selected.has(row.id) || selected.has(row.song.id))
-    if (playlist.kind !== 'total') return rows
+    const albums = buildAlbumSongTreeModel(rows, { totalPlaylist: playlist.kind === 'total' })
+    const orderedRows = orderRowsByAlbumTree(rows, albums)
+    if (selected.size) return orderedRows.filter((row) => selected.has(row.id) || selected.has(row.song.id))
+    if (playlist.kind !== 'total') return orderedRows
 
-    const visibleSongIds = new Set(
-      buildAlbumSongTreeModel(rows, { totalPlaylist: true })
-        .flatMap((album) => album.children.map((child) => child.songId)),
-    )
-    return rows.filter((row) => visibleSongIds.has(row.id))
+    const visibleSongIds = new Set(albums.flatMap((album) => album.children.map((child) => child.songId)))
+    return orderedRows.filter((row) => visibleSongIds.has(row.id))
   }
 
   listDownloadTasks(): DownloadTask[] {
@@ -196,25 +197,29 @@ export class AppServices {
     return this.listDownloadTasks()
   }
 
-  scanFlacConversions(sourceDir: string, outputDir: string): ConvertTask[] {
-    return this.flacConverter.scan(sourceDir, outputDir)
+  scanFlacConversions(sourceDir: string): ConvertTask[] {
+    return this.flacConverter.scan(sourceDir)
   }
 
   listFlacConversions(): ConvertTask[] {
     return this.flacConverter.list()
   }
 
-  startFlacConversions(options: ConvertOptions): { started: boolean; tasks: ConvertTask[] } {
-    if (this.convertRunning) return { started: false, tasks: this.flacConverter.list() }
+  getFlacConversionResult(): ConvertResult {
+    return this.flacConverter.result()
+  }
+
+  startFlacConversions(options: ConvertOptions): { started: boolean } & ConvertResult {
+    if (this.convertRunning) return { started: false, ...this.flacConverter.result() }
     this.convertRunning = this.flacConverter.start(options)
       .catch((error) => {
         console.error(error)
-        return this.flacConverter.list()
+        return this.flacConverter.result()
       })
       .finally(() => {
         this.convertRunning = null
-      }) as Promise<ConvertTask[]>
-    return { started: true, tasks: this.flacConverter.list() }
+      }) as Promise<ConvertResult>
+    return { started: true, ...this.flacConverter.result() }
   }
 
   cancelFlacConversions(): ConvertTask[] {

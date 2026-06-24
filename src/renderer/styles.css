@@ -645,7 +645,19 @@ progress::-webkit-progress-value {
 
 .converter-pane {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.converter-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  border: 1px solid #f0d59a;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #6f4d00;
+  font-size: 13px;
 }
 
 .page-card {

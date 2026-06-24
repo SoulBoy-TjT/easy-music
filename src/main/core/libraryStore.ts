@@ -138,12 +138,14 @@ export class LibraryStore implements DownloadStore {
     tx(artistName)
   }
 
-  removeSongsFromPlaylist(playlistId: string, songIds: string[]): void {
+  removeSongsFromPlaylist(playlistId: string, songIds: string[]): number {
     const stmt = this.db.prepare('DELETE FROM playlist_songs WHERE playlist_id=? AND song_id=?')
     const tx = this.db.transaction((ids: string[]) => {
-      for (const id of ids) stmt.run(playlistId, id)
+      let changes = 0
+      for (const id of ids) changes += stmt.run(playlistId, id).changes
+      return changes
     })
-    tx(songIds)
+    return tx(songIds)
   }
 
   listPlaylistSongs(playlistId: string): PlaylistSongRow[] {
@@ -208,7 +210,7 @@ export class LibraryStore implements DownloadStore {
       error: row.error,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-    }))
+    })).sort(compareDownloadTasks)
   }
 
   updateDownloadTask(id: string, updates: Partial<DownloadTask>): void {
@@ -500,4 +502,27 @@ function rowToSong(row: any): Song {
     qualitys: JSON.parse(row.qualitys_json || '[]'),
     raw: JSON.parse(row.raw_json || '{}'),
   }
+}
+
+function compareDownloadTasks(left: DownloadTask, right: DownloadTask): number {
+  return compareStrings(readTaskPublishDate(left), readTaskPublishDate(right)) ||
+    compareStrings(normalizeCompareText(left.song.albumName), normalizeCompareText(right.song.albumName)) ||
+    compareNumbers(left.song.trackNo, right.song.trackNo) ||
+    compareStrings(normalizeCompareText(left.song.title), normalizeCompareText(right.song.title)) ||
+    compareNumbers(left.createdAt, right.createdAt) ||
+    left.id.localeCompare(right.id)
+}
+
+function readTaskPublishDate(task: DownloadTask): string {
+  return String(task.song.raw?.publishDate || task.song.raw?.publish_date || task.song.raw?.albumPublishDate || '')
+}
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right)
+}
+
+function compareNumbers(left: number, right: number): number {
+  const normalizedLeft = Number.isFinite(left) ? left : 0
+  const normalizedRight = Number.isFinite(right) ? right : 0
+  return normalizedLeft - normalizedRight
 }

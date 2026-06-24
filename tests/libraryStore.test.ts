@@ -196,6 +196,26 @@ describe('library store', () => {
     store.close()
   })
 
+  it('lists download tasks by album order and track number before creation order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-store-'))
+    tempDirs.push(dir)
+    const store = new LibraryStore(join(dir, 'library.db'))
+    const laterSecond = makeSongInAlbum('later-2', 'Later Second', 'Later Album', '2024-02-01', 2)
+    const earlierSecond = makeSongInAlbum('earlier-2', 'Earlier Second', 'Earlier Album', '2024-01-01', 2)
+    const earlierFirst = makeSongInAlbum('earlier-1', 'Earlier First', 'Earlier Album', '2024-01-01', 1)
+
+    store.createDownloadTask('playlist-1', 'Singer', laterSecond, 'flac')
+    store.createDownloadTask('playlist-1', 'Singer', earlierSecond, 'flac')
+    store.createDownloadTask('playlist-1', 'Singer', earlierFirst, 'flac')
+
+    expect(store.listDownloadTasks().map((task) => task.song.title)).toEqual([
+      'Earlier First',
+      'Earlier Second',
+      'Later Second',
+    ])
+    store.close()
+  })
+
   it('pauses waiting and running download tasks so they can be resumed later', () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-store-'))
     tempDirs.push(dir)
@@ -333,6 +353,19 @@ function makePlatformAlbum(platform: string, songId: string, title = 'Song'): Al
       title,
       albumId: `${platform}:album`,
     }],
+  }
+}
+
+function makeSongInAlbum(songId: string, title: string, albumName: string, publishDate: string, trackNo: number) {
+  return {
+    ...makePlatformAlbum('kg', songId, title).songs[0],
+    id: `kg:${songId}`,
+    platformSongId: songId,
+    title,
+    albumId: `kg:${albumName}`,
+    albumName,
+    trackNo,
+    raw: { publishDate, albumSongCount: 2 },
   }
 }
 

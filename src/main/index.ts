@@ -65,11 +65,14 @@ function registerIpc(service: AppServices): void {
       mainWindow?.webContents.send('artist:fetchProgress', progress)
     })
   })
-  ipcMain.handle('playlist:list', () => service.listPlaylists())
-  ipcMain.handle('playlist:songs', (_event, id: string) => service.listPlaylistSongs(id))
-  ipcMain.handle('playlist:delete', (_event, id: string) => service.deletePlaylist(id))
-  ipcMain.handle('artist:delete', (_event, artistName: string) => service.deleteArtist(artistName))
-  ipcMain.handle('playlist:removeSongs', (_event, payload: { playlistId: string; songIds: string[] }) => service.removeSongsFromPlaylist(payload.playlistId, payload.songIds))
+  ipcMain.handle('playlist:list', () => toIpcPayload(service.listPlaylists()))
+  ipcMain.handle('playlist:songs', (_event, id: string) => toIpcPayload(service.listPlaylistSongs(id)))
+  ipcMain.handle('playlist:delete', (_event, id: string) => toIpcPayload(service.deletePlaylist(id)))
+  ipcMain.handle('artist:delete', (_event, artistName: string) => toIpcPayload(service.deleteArtist(artistName)))
+  ipcMain.handle('playlist:removeSongs', (_event, payload: { playlistId: string; songIds: string[] }) => {
+    service.removeSongsFromPlaylist(payload.playlistId, payload.songIds)
+    return { ok: true }
+  })
 
   ipcMain.handle('download:create', (_event, payload: { playlistId: string; songIds?: string[] }) => service.createDownloadTasks(payload.playlistId, payload.songIds || []))
   ipcMain.handle('download:start', (_event, ids?: string[]) => service.startDownloads(ids || []))
@@ -78,10 +81,11 @@ function registerIpc(service: AppServices): void {
   ipcMain.handle('download:removeAll', () => service.removeAllDownloadTasks())
   ipcMain.handle('download:list', () => service.listDownloadTasks())
 
-  ipcMain.handle('convert:scan', (_event, payload: { sourceDir: string; outputDir: string }) => service.scanFlacConversions(payload.sourceDir, payload.outputDir))
-  ipcMain.handle('convert:start', (_event, payload: { sourceDir: string; outputDir: string; bitrate: string; overwrite?: boolean }) => service.startFlacConversions(payload))
+  ipcMain.handle('convert:scan', (_event, payload: { sourceDir: string }) => service.scanFlacConversions(payload.sourceDir))
+  ipcMain.handle('convert:start', (_event, payload: { sourceDir: string; bitrate: string; overwrite?: boolean }) => service.startFlacConversions(payload))
   ipcMain.handle('convert:cancel', () => service.cancelFlacConversions())
   ipcMain.handle('convert:list', () => service.listFlacConversions())
+  ipcMain.handle('convert:result', () => service.getFlacConversionResult())
 
   ipcMain.handle('source:import', (_event, script: string) => service.importSource(script))
   ipcMain.handle('source:list', () => service.listSources())
@@ -114,6 +118,10 @@ function registerIpc(service: AppServices): void {
     if (result.canceled || !result.filePaths[0]) return ''
     return result.filePaths[0]
   })
+}
+
+function toIpcPayload<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
 }
 
 void app.whenReady().then(() => {
