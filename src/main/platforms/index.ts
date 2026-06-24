@@ -806,10 +806,27 @@ function extractQQSong(songItem: any, album: RawAlbumSeed, artistName: string, s
 }
 
 async function fetchKuwoAlbums(artistName: string, progress?: ProgressCallback): Promise<Album[]> {
+  const albums = await fetchKuwoAlbumsBySearchQuery(artistName, artistName, progress)
+  if (albums.length) return albums
+  for (const query of await resolveKuwoAliasQueries(artistName)) {
+    if (normalizeCompareText(query) === normalizeCompareText(artistName)) continue
+    const aliasAlbums = await fetchKuwoAlbumsBySearchQuery(artistName, query, progress)
+    if (aliasAlbums.length) return aliasAlbums
+  }
+  return albums
+}
+
+async function fetchKuwoAlbumsBySearchQuery(artistName: string, searchQuery: string, progress?: ProgressCallback): Promise<Album[]> {
   const grouped = new Map<string, { seed: RawAlbumSeed; songs: Song[] }>()
   for (let page = 0; page < KUWO_MAX_PAGES; page++) {
     progress?.({ platform: 'kw', stage: 'songs', current: page + 1, total: KUWO_MAX_PAGES, message: '酷我音乐：搜索并聚合专辑' })
-    const { items } = await fetchKuwoSearchPage(artistName, page)
+    let items: any[]
+    try {
+      ;({ items } = await fetchKuwoSearchPage(searchQuery, page))
+    } catch (error) {
+      if (grouped.size > 0) break
+      throw error
+    }
     if (!items.length) break
     for (const item of items) {
       const singer = decodeHtml(item.ARTIST || item.artist || '')
@@ -858,6 +875,15 @@ async function fetchKuwoAlbums(artistName: string, progress?: ProgressCallback):
     albums.push(makeAlbum('kw', artistName, enriched, group.songs))
   }
   return albums
+}
+
+async function resolveKuwoAliasQueries(artistName: string): Promise<string[]> {
+  try {
+    const singers = await searchQQSingers(artistName)
+    return unique(singers.map((singer) => singer.name).filter((name) => artistMatches(artistName, name)))
+  } catch {
+    return []
+  }
 }
 
 async function searchKuwoSongs(query: string, limit: number): Promise<Song[]> {
@@ -1145,7 +1171,22 @@ function splitArtistNames(value: string): string[] {
 function artistMatches(targetArtist: string, candidateArtist: string): boolean {
   const target = normalizeCompareText(targetArtist)
   if (!target) return false
-  return splitArtistNames(candidateArtist).some((part) => normalizeCompareText(part) === target)
+  const targetWithoutLatinAlias = stripLatinAlias(target)
+  return splitArtistNames(candidateArtist).some((part) => {
+    const candidate = normalizeCompareText(part)
+    if (candidate === target) return true
+    const candidateWithoutLatinAlias = stripLatinAlias(candidate)
+    return hasCjkText(targetWithoutLatinAlias) &&
+      candidateWithoutLatinAlias === targetWithoutLatinAlias
+  })
+}
+
+function stripLatinAlias(value: string): string {
+  return value.replace(/[a-z0-9]+/g, '')
+}
+
+function hasCjkText(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value)
 }
 
 function kugouQualitys(item: any): Quality[] {

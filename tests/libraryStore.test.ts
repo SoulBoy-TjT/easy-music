@@ -107,6 +107,25 @@ describe('library store', () => {
     store.close()
   })
 
+  it('dedupes repeated song ids before writing playlist rows', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-store-'))
+    tempDirs.push(dir)
+    const store = new LibraryStore(join(dir, 'library.db'))
+    const album = makePlatformAlbum('kg', 'kg-song')
+    const duplicateAlbum: Album = {
+      ...album,
+      songs: [album.songs[0], { ...album.songs[0] }],
+    }
+
+    store.replaceArtistPlaylists('Singer', { kw: [], kg: [duplicateAlbum], tx: [], wy: [] })
+
+    const kugou = store.listPlaylists().find((playlist) => playlist.platform === 'kg')!
+    const total = store.listPlaylists().find((playlist) => playlist.kind === 'total')!
+    expect(store.listPlaylistSongs(kugou.id)).toHaveLength(1)
+    expect(store.listPlaylistSongs(total.id)).toHaveLength(1)
+    store.close()
+  })
+
   it('keeps an existing platform playlist when a new fetch for that platform is incomplete', () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-store-'))
     tempDirs.push(dir)

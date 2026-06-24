@@ -381,6 +381,106 @@ describe('platform album fetching', () => {
     expect(result.tx[0].songCount).toBe(1)
   })
 
+  it('keeps songs when the platform artist name prefixes the requested Chinese name with a Latin alias', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/v3/search/singer')) {
+        return jsonResponse({ data: { info: [{ singername: 'Eric周兴哲', singerid: 169235 }] } })
+      }
+      if (url.includes('/api/v5/singer/album')) {
+        return jsonResponse({ data: { total: 1, info: [{ albumid: 11, albumname: '想念你想我', publishtime: '2024-01-01', songcount: 1 }] } })
+      }
+      if (url.includes('/api/v3/album/song')) {
+        return jsonResponse({ data: { info: [{ filename: 'Eric周兴哲 - 想念你想我', hash: 'hash-1', duration: 180 }] } })
+      }
+      if (url.includes('smartbox_new.fcg')) {
+        return jsonResponse({ code: 0, data: { singer: { itemlist: [{ mid: 'eric-mid', name: 'Eric周兴哲' }] } } })
+      }
+      if (url.includes('musicu.fcg')) {
+        const body = parseMusicuPayload(url, init)
+        if (body.singerAlbum) {
+          return jsonResponse({ singerAlbum: { data: { total: 1, list: [{ album_mid: 'album-a', album_name: '想念你想我', song_count: 1 }] } } })
+        }
+        return jsonResponse({ albumSonglist: { data: { totalNum: 1, songList: [
+          qqSong('song-a1', '想念你想我', 'album-a', '想念你想我', [{ name: 'Eric周兴哲', mid: 'eric-mid' }]),
+        ] } } })
+      }
+      return jsonResponse({})
+    }))
+
+    const result = await fetchArtistPlatformAlbums('周兴哲', undefined, { platforms: ['kg', 'tx'] })
+
+    expect(result.kg).toHaveLength(1)
+    expect(result.kg[0].songs).toHaveLength(1)
+    expect(result.tx).toHaveLength(1)
+    expect(result.tx[0].songs).toHaveLength(1)
+  })
+
+  it('retries Kuwo search with a platform alias when the requested Chinese name returns no songs', async () => {
+    const kuwoQueries: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname.includes('search.kuwo.cn') && url.searchParams.get('stype') === 'albuminfo') {
+        return jsonResponse({})
+      }
+      if (url.hostname.includes('search.kuwo.cn')) {
+        const query = url.searchParams.get('all') || ''
+        kuwoQueries.push(query)
+        if (query === '周兴哲') return jsonResponse({ TOTAL: '0', abslist: [] })
+        if (query === 'Eric周兴哲') {
+          return jsonResponse({ TOTAL: '1', abslist: [{
+            MUSICRID: 'MUSIC_1',
+            SONGNAME: '想念你想我',
+            ARTIST: 'Eric周兴哲',
+            ALBUM: '想念你想我',
+            ALBUMID: 'album-a',
+            DURATION: '180',
+          }] })
+        }
+      }
+      if (url.hostname.includes('c.y.qq.com')) {
+        return jsonResponse({ code: 0, data: { singer: { itemlist: [{ mid: 'eric-mid', name: 'Eric周兴哲' }] } } })
+      }
+      return jsonResponse({})
+    }))
+
+    const result = await fetchArtistPlatformAlbums('周兴哲', undefined, { platforms: ['kw'] })
+
+    expect(kuwoQueries).toContain('周兴哲')
+    expect(kuwoQueries).toContain('Eric周兴哲')
+    expect(result.kw).toHaveLength(1)
+    expect(result.kw[0].songs).toHaveLength(1)
+  })
+
+  it('keeps partial Kuwo albums when a later search page is rate limited', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname.includes('search.kuwo.cn') && url.searchParams.get('stype') === 'albuminfo') {
+        return jsonResponse({})
+      }
+      if (url.hostname.includes('search.kuwo.cn')) {
+        const page = Number(url.searchParams.get('pn') || 0)
+        if (page === 0) {
+          return jsonResponse({ TOTAL: '100', abslist: Array.from({ length: 50 }, (_, index) => ({
+            MUSICRID: `MUSIC_${index}`,
+            SONGNAME: `想念你想我 ${index}`,
+            ARTIST: 'Eric周兴哲',
+            ALBUM: '想念你想我',
+            ALBUMID: 'album-a',
+            DURATION: '180',
+          })) })
+        }
+        return new Response('<html>rate limited</html>', { status: 403 })
+      }
+      return jsonResponse({})
+    }))
+
+    const result = await fetchArtistPlatformAlbums('周兴哲', undefined, { platforms: ['kw'] })
+
+    expect(result.kw).toHaveLength(1)
+    expect(result.kw[0].songs).toHaveLength(50)
+  })
+
   it('keeps fetching Kuwo search pages until the old tool page limit or an empty page', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input))

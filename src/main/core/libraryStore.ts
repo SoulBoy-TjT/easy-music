@@ -459,8 +459,18 @@ export class LibraryStore implements DownloadStore {
   private replacePlaylistSongs(playlistId: string, rows: Array<{ songId: string; candidateSources: unknown[] }>): void {
     this.db.prepare('DELETE FROM playlist_songs WHERE playlist_id=?').run(playlistId)
     const stmt = this.db.prepare('INSERT INTO playlist_songs (playlist_id, song_id, position, candidate_sources_json) VALUES (?, ?, ?, ?)')
-    rows.forEach((row, index) => stmt.run(playlistId, row.songId, index + 1, JSON.stringify(row.candidateSources)))
+    dedupePlaylistSongRows(rows).forEach((row, index) => stmt.run(playlistId, row.songId, index + 1, JSON.stringify(row.candidateSources)))
   }
+}
+
+function dedupePlaylistSongRows(rows: Array<{ songId: string; candidateSources: unknown[] }>): Array<{ songId: string; candidateSources: unknown[] }> {
+  const bySongId = new Map<string, { songId: string; candidateSources: unknown[] }>()
+  for (const row of rows) {
+    const existing = bySongId.get(row.songId)
+    if (existing) existing.candidateSources.push(...row.candidateSources)
+    else bySongId.set(row.songId, { songId: row.songId, candidateSources: [...row.candidateSources] })
+  }
+  return Array.from(bySongId.values())
 }
 
 function stableId(...parts: unknown[]): string {

@@ -76,8 +76,10 @@ describe('app services download task creation', () => {
       const total = service.listPlaylists().find((playlist) => playlist.kind === 'total')!
 
       const result = service.listPlaylistSongs(total.id)
+      const updatedTotal = service.listPlaylists().find((playlist) => playlist.id === total.id)!
       const albumSongIds = result.albums.flatMap((albumNode) => albumNode.children.map((child) => child.songId))
 
+      expect(updatedTotal.songCount).toBe(result.rows.length)
       expect(result.rows.map((row) => row.id)).toEqual(albumSongIds)
       expect(result.rows.map((row) => row.song.title)).toEqual(['A', 'B', 'C'])
       expect(result.rows.every((row) => row.song.platform === 'tx')).toBe(true)

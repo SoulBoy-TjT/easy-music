@@ -69,9 +69,10 @@ export class AppServices {
     return this.store.listPlaylists().map((playlist) => {
       const rows = this.store.listPlaylistSongs(playlist.id)
       const albums = buildAlbumSongTreeModel(rows, { totalPlaylist: playlist.kind === 'total' })
+      const visibleRows = orderRowsByAlbumTree(rows, albums)
       return {
         ...playlist,
-        songCount: rows.length,
+        songCount: visibleRows.length,
         albumCount: albums.length,
       }
     })
