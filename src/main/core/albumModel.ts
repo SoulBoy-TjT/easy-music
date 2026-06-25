@@ -12,6 +12,10 @@ interface InternalAlbumNode {
   mergedAlbums: MergedAlbumInfo[]
 }
 
+const SAME_DATE_SIMILAR_TRACK_REASON = '同发行日、曲目数相同且歌曲名规范化后相似，合并为同一专辑'
+const SONG_TITLE_VARIANT_SEGMENT_RE = /[\s._-]*[\[(（【][^\])）】]*(?:explicit|clean|live|remaster(?:ed)?|version|feat\.?|featuring|ft\.?|with|现场|版本|版)[^\])）】]*[\])）】]/gi
+const SONG_TITLE_TRAILING_VERSION_RE = /(?:[\s._-]+|\s*[\[(（【]\s*)(?:explicit|clean|live|remaster(?:ed)?|version)(?:[\s._-]+(?:version|remaster(?:ed)?))?\s*[\])）】]?$/i
+
 export function buildAlbumSongTreeModel(
   rows: PlaylistSongRow[],
   options: { totalPlaylist?: boolean } = {},
@@ -110,9 +114,12 @@ function dedupeTotalAlbums(nodes: InternalAlbumNode[]): InternalAlbumNode[] {
   const byDate = new Map<string, InternalAlbumNode[]>()
   for (const node of kept) byDate.set(node.publishDate, [...(byDate.get(node.publishDate) || []), node])
   return Array.from(byDate.values())
-    .flatMap((sameDate) => dedupeContainedAlbums(sameDate, {
-      titleReason: '同日歌曲集合子集，保留歌曲数更多的专辑',
-    }))
+    .flatMap((sameDate) => {
+      const similarTrackWinners = mergeSameDateSimilarTrackAlbums(sameDate, SAME_DATE_SIMILAR_TRACK_REASON)
+      return dedupeContainedAlbums(similarTrackWinners, {
+        titleReason: '同日歌曲集合子集，保留歌曲数更多的专辑',
+      })
+    })
     .sort(albumSort)
 }
 
@@ -171,6 +178,24 @@ function mergeSameDaySameNameAlbums(nodes: InternalAlbumNode[], reason: string):
     result.push(sortChildren(target))
   }
   return result
+}
+
+function mergeSameDateSimilarTrackAlbums(nodes: InternalAlbumNode[], reason: string): InternalAlbumNode[] {
+  const hidden = new Set<InternalAlbumNode>()
+  const ordered = [...nodes].sort(bestSort)
+
+  for (const target of ordered) {
+    if (hidden.has(target)) continue
+    for (const candidate of ordered) {
+      if (candidate === target || hidden.has(candidate)) continue
+      if (!sameDateSimilarTrackAlbum(candidate, target)) continue
+      hidden.add(candidate)
+      absorbAlbum(target, candidate, reason)
+    }
+    sortChildren(target)
+  }
+
+  return nodes.filter((node) => !hidden.has(node))
 }
 
 function dedupeContainedAlbums(nodes: InternalAlbumNode[], options: {
@@ -235,6 +260,17 @@ function equivalentSameSizeAlbum(left: InternalAlbumNode, right: InternalAlbumNo
   })
 }
 
+function sameDateSimilarTrackAlbum(left: InternalAlbumNode, right: InternalAlbumNode): boolean {
+  if (left.publishDate !== right.publishDate || left.children.length !== right.children.length) return false
+  if (left.children.length === 0) return false
+
+  return left.children.every((leftChild, index) => {
+    const rightChild = right.children[index]
+    if (!rightChild || !sameTrackPosition(leftChild.song, rightChild.song)) return false
+    return similarNormalizedSongTitle(leftChild.song.title, rightChild.song.title)
+  })
+}
+
 function equivalentSong(left: Song, right: Song): boolean {
   if (normalizeSongTitle(left.title) === normalizeSongTitle(right.title)) return true
   return sameTrackNo(left, right) && closeDuration(left.duration, right.duration)
@@ -255,6 +291,12 @@ function relatedSongTitle(left: string, right: string): boolean {
 
 function sameTrackNo(left: Song, right: Song): boolean {
   return Number(left.trackNo || 0) > 0 && left.trackNo === right.trackNo
+}
+
+function sameTrackPosition(left: Song, right: Song): boolean {
+  const leftTrack = Number(left.trackNo || 0)
+  const rightTrack = Number(right.trackNo || 0)
+  return leftTrack <= 0 || rightTrack <= 0 || leftTrack === rightTrack
 }
 
 function closeDuration(left: number, right: number): boolean {
@@ -312,6 +354,22 @@ function normalizeSongTitle(title: string): string {
 
 function normalizeDisplaySongTitle(title: string): string {
   return normalizeSongTitle(title).replace(/(live|现场版|心动版)$/g, '')
+}
+
+function similarNormalizedSongTitle(left: string, right: string): boolean {
+  const leftTitle = normalizeSimilarSongTitle(left)
+  const rightTitle = normalizeSimilarSongTitle(right)
+  return Boolean(leftTitle && rightTitle && leftTitle === rightTitle)
+}
+
+function normalizeSimilarSongTitle(title: string): string {
+  let normalized = String(title || '').replace(SONG_TITLE_VARIANT_SEGMENT_RE, ' ')
+  let previous = ''
+  while (previous !== normalized) {
+    previous = normalized
+    normalized = normalized.replace(SONG_TITLE_TRAILING_VERSION_RE, '')
+  }
+  return normalizeSongTitle(normalized)
 }
 
 function parseChineseInteger(value: string): number {

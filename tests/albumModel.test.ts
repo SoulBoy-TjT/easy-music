@@ -215,6 +215,91 @@ describe('album song model', () => {
     expect(tree[0].deleteSongIds.sort()).toEqual(['1', '2'])
   })
 
+  it('merges same-day same-size albums when track names only differ by explicit markers', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'wy', '2020-04-24', 'Dog Days', 1, 'Dog Days'),
+      row('2', 'kg', '2020-04-24', 'Dog Days (Explicit)', 1, 'Dog Days (Explicit)'),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('kg')
+    expect(tree[0].children.map((child) => child.title)).toEqual(['01. Dog Days (Explicit)'])
+    expect(tree[0].mergedAlbums).toHaveLength(1)
+    expect(tree[0].mergedAlbums[0].reason).toBe('同发行日、曲目数相同且歌曲名规范化后相似，合并为同一专辑')
+    expect(tree[0].deleteSongIds.sort()).toEqual(['1', '2'])
+  })
+
+  it('merges same-day same-size albums when only some tracks have explicit markers', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'wy', '2024-07-22', 'sad songs', 1, '去北极忘记你'),
+      row('2', 'wy', '2024-07-22', 'sad songs', 2, 'dishonesty'),
+      row('3', 'wy', '2024-07-22', 'sad songs', 3, 'winners'),
+      row('4', 'wy', '2024-07-22', 'sad songs', 4, 'camo'),
+      row('5', 'kg', '2024-07-22', 'sad songs (Explicit)', 1, '去北极忘记你'),
+      row('6', 'kg', '2024-07-22', 'sad songs (Explicit)', 2, 'dishonesty (Explicit)'),
+      row('7', 'kg', '2024-07-22', 'sad songs (Explicit)', 3, 'winners'),
+      row('8', 'kg', '2024-07-22', 'sad songs (Explicit)', 4, 'camo'),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('kg')
+    expect(tree[0].children.map((child) => child.title)).toEqual([
+      '01. 去北极忘记你',
+      '02. dishonesty (Explicit)',
+      '03. winners',
+      '04. camo',
+    ])
+    expect(tree[0].mergedAlbums).toHaveLength(1)
+    expect(tree[0].mergedAlbums[0].reason).toBe('同发行日、曲目数相同且歌曲名规范化后相似，合并为同一专辑')
+    expect(tree[0].deleteSongIds.sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'])
+  })
+
+  it('merges same-day same-size albums when featured artist parentheticals differ', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'kg', '2024-01-31', 'Bread and Better (feat. 姜涛 & Gentle Bones)', 1, 'Bread and Better (feat. 姜涛 & Gentle Bones)'),
+      row('2', 'wy', '2024-01-31', 'Bread and Better (feat. Keung To & Gentle Bones)', 1, 'Bread and Better (feat. Keung To & Gentle Bones)'),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('kg')
+    expect(tree[0].children.map((child) => child.title)).toEqual(['01. Bread and Better (feat. 姜涛 & Gentle Bones)'])
+    expect(tree[0].mergedAlbums).toHaveLength(1)
+    expect(tree[0].mergedAlbums[0].reason).toBe('同发行日、曲目数相同且歌曲名规范化后相似，合并为同一专辑')
+    expect(tree[0].deleteSongIds.sort()).toEqual(['1', '2'])
+  })
+
+  it('keeps same-day same-size albums separate when a normalized track name differs', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'wy', '2024-07-22', 'Album One', 1, 'same'),
+      row('2', 'wy', '2024-07-22', 'Album One', 2, 'honest'),
+      row('3', 'kg', '2024-07-22', 'Album Two', 1, 'same (Explicit)'),
+      row('4', 'kg', '2024-07-22', 'Album Two', 2, 'different'),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(2)
+    expect(tree.every((album) => album.mergedAlbums.length === 0)).toBe(true)
+  })
+
+  it('keeps same-size albums separate when normalized track names match on different dates', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'wy', '2024-07-22', 'Album One', 1, 'same'),
+      row('2', 'kg', '2024-07-23', 'Album Two', 1, 'same (Explicit)'),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(2)
+    expect(tree.every((album) => album.mergedAlbums.length === 0)).toBe(true)
+  })
+
   it('keeps same-name albums separate when title variants have the same track number but different duration', () => {
     const rows: PlaylistSongRow[] = [
       row('1', 'wy', '2000-02-24', 'Penny', 1, 'Penny In Studio', 190),
