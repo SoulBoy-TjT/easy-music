@@ -35,6 +35,83 @@ describe('app services download task creation', () => {
     }
   })
 
+  it('keeps balanced matched hidden albums available for merge audit while listing only visible songs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [],
+        kg: [album('kg', '2024-07-10', ['Intro Live', 'Blue Live', 'Home Live'], 'World Tour Live EP')],
+        tx: [album('tx', '2024-07-10', ['Intro', 'Blue', 'Home', 'Rain', 'Night', 'Fire', 'River', 'Encore'], 'World Tour Live')],
+        wy: [],
+      })
+      const total = service.listPlaylists().find((playlist) => playlist.kind === 'total')!
+
+      const result = service.listPlaylistSongs(total.id)
+
+      expect(result.rows).toHaveLength(8)
+      expect(result.rows.every((row) => row.song.platform === 'tx')).toBe(true)
+      expect(result.albums).toHaveLength(1)
+      expect(result.albums[0].mergedAlbums).toHaveLength(1)
+      expect(result.albums[0].mergedAlbums[0]).toMatchObject({
+        albumName: 'World Tour Live EP',
+        platform: 'kg',
+        songs: ['01. Intro Live', '02. Blue Live', '03. Home Live'],
+      })
+    } finally {
+      service.close()
+    }
+  })
+
+  it('merges cross-date total playlist album variants before listing visible songs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    try {
+      const titles = [
+        '爱投罗网',
+        '爱骗我',
+        '未完的承诺',
+        '惜命命',
+        '狮子吼',
+        '第61分钟',
+        '爱我喊出来',
+        '爱惨了',
+        '想逃',
+        '如果还有如果',
+        '舞魂再现',
+        '我的皇后',
+        '占爱为王',
+        '爱投罗网 Remix',
+        '爱我喊出来 Remix',
+        '第61分钟 Remix',
+      ]
+      service.store.replaceArtistPlaylists('Singer', {
+        kw: [],
+        kg: [album('kg', '2013-10-16', titles, '狮子吼')],
+        tx: [album('tx', '2013-12-06', titles, '狮子吼之舞魂再现 冠军ENCORE版')],
+        wy: [],
+      })
+      const total = service.listPlaylists().find((playlist) => playlist.kind === 'total')!
+
+      const result = service.listPlaylistSongs(total.id)
+
+      expect(result.rows).toHaveLength(16)
+      expect(result.rows.every((row) => row.song.platform === 'kg')).toBe(true)
+      expect(result.albums).toHaveLength(1)
+      expect(result.albums[0].mergedAlbums).toHaveLength(1)
+      expect(result.albums[0].mergedAlbums[0]).toMatchObject({
+        albumName: '狮子吼之舞魂再现 冠军ENCORE版',
+        publishDate: '2013-12-06',
+        platform: 'tx',
+        songCount: 16,
+      })
+    } finally {
+      service.close()
+    }
+  })
+
   it('lists songs in the same order as the album tree', () => {
     const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
     tempDirs.push(dir)

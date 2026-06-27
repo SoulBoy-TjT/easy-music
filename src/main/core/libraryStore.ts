@@ -3,11 +3,24 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isReusableDownloadedAudioFile } from './audioValidation'
+import { findBalancedSongMatch, shouldMergeBalancedAlbums, type AlbumMergeCandidate } from './albumMergeScorer'
 import { extForQuality, normalizeCompareText } from './naming'
-import { PLATFORM_LABELS, type Album, type DownloadStatus, type DownloadStore, type DownloadTask, type Platform, type Playlist, type PlaylistSongRow, type Quality, type Song } from './types'
+import { PLATFORM_LABELS, PLATFORM_PRIORITY, type Album, type CandidateSource, type DownloadStatus, type DownloadStore, type DownloadTask, type Platform, type Playlist, type PlaylistSongRow, type Quality, type Song } from './types'
 
 const TOTAL_PRIMARY_PLATFORMS = ['kg', 'tx', 'wy']
 const TOTAL_DOWNLOAD_CANDIDATE_PLATFORMS = ['kg', 'tx', 'wy', 'kw']
+
+interface TotalSongRow {
+  songId: string
+  song: Song
+}
+
+interface TotalAlbumCandidate extends AlbumMergeCandidate {
+  key: string
+  albumId: string
+  firstPosition: number
+  rows: TotalSongRow[]
+}
 
 export interface MusicSourceRecord {
   id: string
@@ -40,7 +53,7 @@ export class LibraryStore implements DownloadStore {
   replaceArtistPlaylists(artistName: string, platformAlbums: Record<string, Album[]>, options: ReplaceArtistPlaylistsOptions = {}): void {
     const preservePlatforms = new Set(options.preservePlatforms || [])
     const tx = this.db.transaction(() => {
-      const platformSongRows = new Map<string, Array<{ songId: string; song: Song }>>()
+      const platformSongRows = new Map<string, TotalSongRow[]>()
       for (const platform of Object.keys(PLATFORM_LABELS)) {
         const playlistId = stableId('playlist', artistName, platform)
         const existingRows = preservePlatforms.has(platform as Platform)
@@ -61,7 +74,7 @@ export class LibraryStore implements DownloadStore {
           platformSongRows.set(platform, existingRows)
           continue
         }
-        const rows: Array<{ songId: string; song: Song }> = []
+        const rows: TotalSongRow[] = []
         for (const album of incomingAlbums) {
           this.upsertAlbum(album)
           for (const song of album.songs) {
@@ -97,16 +110,7 @@ export class LibraryStore implements DownloadStore {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
-      const totalRows: Array<{ songId: string; song: Song; candidates: unknown[] }> = []
-      for (const platform of TOTAL_DOWNLOAD_CANDIDATE_PLATFORMS) {
-        for (const { songId, song } of platformSongRows.get(platform) || []) {
-          const match = totalRows.find((item) => sameSong(item.song, song))
-          const candidate = { platform: song.platform, songId: song.platformSongId, qualitys: song.qualitys, song }
-          if (match) match.candidates.push(candidate)
-          else if (TOTAL_PRIMARY_PLATFORMS.includes(platform)) totalRows.push({ songId, song, candidates: [candidate] })
-        }
-      }
-      this.replacePlaylistSongs(totalPlaylistId, totalRows.map((row) => ({ songId: row.songId, candidateSources: row.candidates })))
+      this.replacePlaylistSongs(totalPlaylistId, buildTotalPlaylistRows(platformSongRows))
     })
     tx()
   }
@@ -490,11 +494,183 @@ function countAlbumGroups(songs: Song[]): number {
   return groups.size
 }
 
-function sameSong(left: Song, right: Song): boolean {
+function buildTotalPlaylistRows(platformSongRows: Map<string, TotalSongRow[]>): Array<{ songId: string; candidateSources: CandidateSource[] }> {
+  const albumGroups = groupTotalAlbumCandidates(buildTotalAlbumCandidates(platformSongRows))
+  const orderedGroups = albumGroups
+    .map((group) => ({ group, winner: selectTotalAlbumWinner(group), order: Math.min(...group.map((album) => album.firstPosition)) }))
+    .filter((item): item is { group: TotalAlbumCandidate[]; winner: TotalAlbumCandidate; order: number } => Boolean(item.winner))
+    .sort((left, right) => left.order - right.order || compareTotalAlbumWinners(left.winner, right.winner))
+
+  const rows: Array<{ songId: string; candidateSources: CandidateSource[] }> = []
+  for (const { group, winner } of orderedGroups) {
+    const primaryAlbums = group
+      .filter((album) => TOTAL_PRIMARY_PLATFORMS.includes(album.platform))
+      .filter((album) => album === winner || shouldStoreHiddenTotalAlbum(album, winner))
+      .sort((left, right) => (left === winner ? -1 : right === winner ? 1 : compareTotalAlbumWinners(left, right)))
+
+    for (const album of primaryAlbums) {
+      for (const row of album.rows) {
+        rows.push({
+          songId: row.songId,
+          candidateSources: album === winner ? collectTotalCandidateSources(row, group, winner) : [toCandidateSource(row)],
+        })
+      }
+    }
+  }
+  return rows
+}
+
+function buildTotalAlbumCandidates(platformSongRows: Map<string, TotalSongRow[]>): TotalAlbumCandidate[] {
+  const albums = new Map<string, TotalAlbumCandidate>()
+  let position = 0
+
+  for (const platform of TOTAL_DOWNLOAD_CANDIDATE_PLATFORMS) {
+    for (const row of platformSongRows.get(platform) || []) {
+      const song = row.song
+      const publishDate = readSongPublishDate(song)
+      const albumId = song.albumId || ''
+      const albumName = song.albumName || ''
+      const key = [song.platform, albumId || normalizeCompareText(albumName), normalizeCompareText(albumName), publishDate].join('\x1f')
+      let album = albums.get(key)
+      if (!album) {
+        album = {
+          key,
+          platform: song.platform,
+          albumId,
+          albumName,
+          publishDate,
+          songCount: Math.max(1, readAlbumSongCount(song)),
+          songs: [],
+          rows: [],
+          firstPosition: position,
+        }
+        albums.set(key, album)
+      }
+      album.rows.push(row)
+      album.songs.push(song)
+      album.songCount = Math.max(album.songCount, album.rows.length, readAlbumSongCount(song))
+      position += 1
+    }
+  }
+
+  return Array.from(albums.values())
+}
+
+function groupTotalAlbumCandidates(albums: TotalAlbumCandidate[]): TotalAlbumCandidate[][] {
+  const parent = albums.map((_, index) => index)
+  const find = (index: number): number => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]]
+      index = parent[index]
+    }
+    return index
+  }
+  const union = (left: number, right: number): void => {
+    const leftRoot = find(left)
+    const rightRoot = find(right)
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot
+  }
+
+  for (let left = 0; left < albums.length; left += 1) {
+    for (let right = left + 1; right < albums.length; right += 1) {
+      if (shouldMergeBalancedAlbums(albums[left], albums[right])) union(left, right)
+    }
+  }
+
+  const groups = new Map<number, TotalAlbumCandidate[]>()
+  albums.forEach((album, index) => {
+    const root = find(index)
+    groups.set(root, [...(groups.get(root) || []), album])
+  })
+  return Array.from(groups.values())
+}
+
+function selectTotalAlbumWinner(group: TotalAlbumCandidate[]): TotalAlbumCandidate | null {
+  const primary = group.filter((album) => TOTAL_PRIMARY_PLATFORMS.includes(album.platform))
+  if (!primary.length) return null
+  return [...primary].sort(compareTotalAlbumWinners)[0]
+}
+
+function compareTotalAlbumWinners(left: TotalAlbumCandidate, right: TotalAlbumCandidate): number {
+  return (
+    right.rows.length - left.rows.length ||
+    right.songCount - left.songCount ||
+    (PLATFORM_PRIORITY[left.platform] ?? 99) - (PLATFORM_PRIORITY[right.platform] ?? 99) ||
+    left.publishDate.localeCompare(right.publishDate) ||
+    left.firstPosition - right.firstPosition ||
+    left.albumName.localeCompare(right.albumName, 'zh-Hans-CN')
+  )
+}
+
+function shouldStoreHiddenTotalAlbum(album: TotalAlbumCandidate, winner: TotalAlbumCandidate): boolean {
+  if (normalizeCompareText(album.albumName) !== normalizeCompareText(winner.albumName)) return true
+  if (album.rows.length !== winner.rows.length) return true
+  return !album.rows.every((row) => {
+    const matched = findMatchingTotalSongRow(row.song, winner.rows)
+    return matched && sameExactTotalSong(row.song, matched.song)
+  })
+}
+
+function sameExactTotalSong(left: Song, right: Song): boolean {
   return normalizeCompareText(left.title) === normalizeCompareText(right.title) &&
     normalizeCompareText(left.artist) === normalizeCompareText(right.artist) &&
     normalizeCompareText(left.albumName) === normalizeCompareText(right.albumName) &&
     (!left.duration || !right.duration || Math.abs(left.duration - right.duration) <= 5)
+}
+
+function collectTotalCandidateSources(row: TotalSongRow, group: TotalAlbumCandidate[], winner: TotalAlbumCandidate): CandidateSource[] {
+  const candidates = new Map<string, CandidateSource>()
+  const orderedAlbums = [
+    winner,
+    ...group
+      .filter((album) => album !== winner)
+      .sort((left, right) => compareTotalCandidateAlbums(left, right)),
+  ]
+
+  for (const album of orderedAlbums) {
+    const matched = album === winner ? row : findMatchingTotalSongRow(row.song, album.rows)
+    if (!matched) continue
+    const candidate = toCandidateSource(matched)
+    const key = `${candidate.platform}\x1f${candidate.songId || matched.songId}`
+    if (!candidates.has(key)) candidates.set(key, candidate)
+  }
+  return Array.from(candidates.values())
+}
+
+function findMatchingTotalSongRow(song: Song, rows: TotalSongRow[]): TotalSongRow | null {
+  const matchedSong = findBalancedSongMatch(song, rows.map((row) => row.song))
+  if (!matchedSong) return null
+  return rows.find((row) => row.song === matchedSong) || null
+}
+
+function compareTotalCandidateAlbums(left: TotalAlbumCandidate, right: TotalAlbumCandidate): number {
+  return (
+    candidatePlatformOrder(left.platform) - candidatePlatformOrder(right.platform) ||
+    compareTotalAlbumWinners(left, right)
+  )
+}
+
+function toCandidateSource(row: TotalSongRow): CandidateSource {
+  return {
+    platform: row.song.platform,
+    songId: row.song.platformSongId,
+    qualitys: row.song.qualitys,
+    song: row.song,
+  }
+}
+
+function readAlbumSongCount(song: Song): number {
+  const rawCount = Number(song.raw?.albumSongCount || song.raw?.songCount || song.raw?.totalSongCount || 0)
+  return Number.isFinite(rawCount) && rawCount > 0 ? rawCount : 0
+}
+
+function readSongPublishDate(song: Song): string {
+  return String(song.raw?.publishDate || song.raw?.publish_date || song.raw?.albumPublishDate || song.raw?.releaseDate || '')
+}
+
+function candidatePlatformOrder(platform: string): number {
+  const index = TOTAL_DOWNLOAD_CANDIDATE_PLATFORMS.indexOf(platform)
+  return index >= 0 ? index : 99
 }
 
 function rowToSong(row: any): Song {

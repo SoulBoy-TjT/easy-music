@@ -200,6 +200,230 @@ describe('album song model', () => {
     expect(tree[0].deleteSongIds.sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'])
   })
 
+  it('shows balanced matched album variants as merged album audit details', () => {
+    const rows: PlaylistSongRow[] = [
+      row('1', 'kg', '2024-07-10', 'World Tour Live EP', 1, 'Intro Live', 180),
+      row('2', 'kg', '2024-07-10', 'World Tour Live EP', 2, 'Blue Live', 181),
+      row('3', 'kg', '2024-07-10', 'World Tour Live EP', 3, 'Home Live', 182),
+      row('4', 'tx', '2024-07-10', 'World Tour Live', 1, 'Intro', 180),
+      row('5', 'tx', '2024-07-10', 'World Tour Live', 2, 'Blue', 181),
+      row('6', 'tx', '2024-07-10', 'World Tour Live', 3, 'Home', 182),
+      row('7', 'tx', '2024-07-10', 'World Tour Live', 4, 'Rain', 183),
+      row('8', 'tx', '2024-07-10', 'World Tour Live', 5, 'Night', 184),
+      row('9', 'tx', '2024-07-10', 'World Tour Live', 6, 'Fire', 185),
+      row('10', 'tx', '2024-07-10', 'World Tour Live', 7, 'River', 186),
+      row('11', 'tx', '2024-07-10', 'World Tour Live', 8, 'Encore', 187),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].albumName).toBe('World Tour Live')
+    expect(tree[0].children.map((child) => child.title)).toEqual([
+      '01. Intro',
+      '02. Blue',
+      '03. Home',
+      '04. Rain',
+      '05. Night',
+      '06. Fire',
+      '07. River',
+      '08. Encore',
+    ])
+    expect(tree[0].mergedAlbums).toHaveLength(1)
+    expect(tree[0].mergedAlbums[0]).toMatchObject({
+      albumName: 'World Tour Live EP',
+      platform: 'kg',
+      songCount: 3,
+      reason: 'balanced album merge score reached threshold',
+      songs: ['01. Intro Live', '02. Blue Live', '03. Home Live'],
+    })
+    expect(tree[0].deleteSongIds.sort()).toEqual(['1', '10', '11', '2', '3', '4', '5', '6', '7', '8', '9'])
+  })
+
+  it('merges cross-date life tour variants when balanced song coverage is high', () => {
+    const wyRows = [
+      row('1001', 'wy', '2011-11-11', '生命之舞Live Tour', 1, '生命之舞 信念', 120),
+      row('1002', 'wy', '2011-11-11', '生命之舞Live Tour', 2, 'Opening Show', 334),
+      ...Array.from({ length: 46 }, (_, index) => {
+        const track = index + 1
+        const title = track <= 32 ? `巡演曲目${track}` : `巡演曲目${track}版`
+        return row(String(1003 + index), 'wy', '2011-11-11', '生命之舞Live Tour', track + 2, title, 180 + index)
+      }),
+    ]
+    const kgRows = Array.from({ length: 46 }, (_, index) => {
+      const track = index + 1
+      return row(String(1101 + index), 'kg', '2011-12-01', '生命之舞 Live Tour', track, `巡演曲目${track}`, 180 + index)
+    })
+
+    const tree = buildAlbumSongTreeModel([...wyRows, ...kgRows], { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('wy')
+    expect(tree[0].albumName).toBe('生命之舞Live Tour')
+    expect(tree[0].children).toHaveLength(48)
+    expect(tree[0].mergedAlbums).toHaveLength(1)
+    expect(tree[0].mergedAlbums[0]).toMatchObject({
+      albumName: '生命之舞 Live Tour',
+      publishDate: '2011-12-01',
+      platform: 'kg',
+      songCount: 46,
+      reason: 'balanced album merge score reached threshold',
+    })
+  })
+
+  it('merges cross-date encore album variants with the original album', () => {
+    const titles = [
+      '爱投罗网',
+      '爱骗我',
+      '未完的承诺',
+      '惜命命',
+      '狮子吼',
+      '第61分钟',
+      '爱我喊出来',
+      '爱惨了',
+      '想逃',
+      '如果还有如果',
+      '舞魂再现',
+      '我的皇后',
+      '占爱为王',
+      '爱投罗网 Remix',
+      '爱我喊出来 Remix',
+      '第61分钟 Remix',
+    ]
+    const rows = [
+      ...albumRows(1201, 'kg', '2013-10-16', '狮子吼', titles),
+      ...albumRows(1301, 'tx', '2013-12-06', '狮子吼之舞魂再现 冠军ENCORE版', titles),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('kg')
+    expect(tree[0].albumName).toBe('狮子吼')
+    expect(tree[0].children).toHaveLength(16)
+    expect(tree[0].mergedAlbums[0]).toMatchObject({
+      albumName: '狮子吼之舞魂再现 冠军ENCORE版',
+      publishDate: '2013-12-06',
+      platform: 'tx',
+      songCount: 16,
+      reason: 'balanced album merge score reached threshold',
+    })
+  })
+
+  it('merges cross-date celebration album variants with the original album', () => {
+    const titles = [
+      '撑腰',
+      '高调爱',
+      '第二顺位',
+      '搞笑',
+      '潜意识失控',
+      '个中强手',
+      '幸福不灭',
+      '潮男正传',
+      '假如你还在这里',
+      '拿手绝活',
+      '为你写首歌',
+    ]
+    const rows = [
+      ...albumRows(1401, 'wy', '2008-12-26', '潮男正传', titles),
+      ...albumRows(1501, 'kg', '2009-01-23', '潮男正传 撑腰相挺庆功2CD版', titles),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('kg')
+    expect(tree[0].albumName).toBe('潮男正传 撑腰相挺庆功2CD版')
+    expect(tree[0].children).toHaveLength(11)
+    expect(tree[0].mergedAlbums[0]).toMatchObject({
+      albumName: '潮男正传',
+      publishDate: '2008-12-26',
+      platform: 'wy',
+      songCount: 11,
+      reason: 'balanced album merge score reached threshold',
+    })
+  })
+
+  it('keeps cross-date album variants separate when song coverage is low', () => {
+    const rows = [
+      ...albumRows(1601, 'kg', '2024-01-01', 'Cross Date Live', ['A', 'B', 'C', 'D', 'E']),
+      ...albumRows(1701, 'tx', '2024-02-01', 'Cross Date Live Deluxe', ['A', 'B', 'Different C', 'Different D', 'Different E']),
+    ]
+
+    const tree = buildAlbumSongTreeModel(rows, { totalPlaylist: true })
+
+    expect(tree).toHaveLength(2)
+    expect(tree.every((album) => album.mergedAlbums.length === 0)).toBe(true)
+  })
+
+  it('keeps same-platform album fragments separate so the real best album wins the merge group', () => {
+    const firstFragment = albumRows(
+      1801,
+      'kg',
+      '2007-11-02',
+      'Best Show',
+      ['呛司呛司', '幸福猎人', '黑眼圈', '狐狸精', '力量', '自我催眠', '淘汰郎', '小丑鱼', '好朋友', '爱转角', '猛男日记', 'Twinkle'],
+      'kg:best-show:main',
+    )
+    const secondFragment = albumRows(
+      1901,
+      'kg',
+      '2007-11-02',
+      'Best Show',
+      ['精舞门', '恋爱达人', '机器娃娃', 'Twinkle (Single Version)'],
+      'kg:best-show:bonus',
+    )
+    const fullAlbum = albumRows(
+      2001,
+      'tx',
+      '2007-11-06',
+      'Best Show 劲舞天王版',
+      [
+        '精舞门',
+        '呛司呛司',
+        '幸福猎人',
+        '黑眼圈',
+        '恋爱达人',
+        '狐狸精',
+        '力量',
+        '自我催眠',
+        '机器娃娃',
+        '淘汰郎',
+        '小丑鱼',
+        '好朋友',
+        '爱转角',
+        '猛男日记',
+        'Twinkle',
+        '劲舞SHOW',
+      ],
+      'tx:best-show-full',
+    )
+
+    const tree = buildAlbumSongTreeModel([...firstFragment, ...secondFragment, ...fullAlbum], { totalPlaylist: true })
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].platform).toBe('tx')
+    expect(tree[0].albumName).toBe('Best Show 劲舞天王版')
+    expect(tree[0].children.map((child) => child.title)).toEqual([
+      '01. 精舞门',
+      '02. 呛司呛司',
+      '03. 幸福猎人',
+      '04. 黑眼圈',
+      '05. 恋爱达人',
+      '06. 狐狸精',
+      '07. 力量',
+      '08. 自我催眠',
+      '09. 机器娃娃',
+      '10. 淘汰郎',
+      '11. 小丑鱼',
+      '12. 好朋友',
+      '13. 爱转角',
+      '14. 猛男日记',
+      '15. Twinkle',
+      '16. 劲舞SHOW',
+    ])
+  })
+
   it('merges same-day same-name albums without blocking on duration differences', () => {
     const rows: PlaylistSongRow[] = [
       row('1', 'tx', '2024-05-11', 'Sunrise Live Version', 1, 'Sunrise', 930),
@@ -404,6 +628,17 @@ describe('album song model', () => {
   })
 })
 
+function albumRows(
+  startId: number,
+  platform: string,
+  publishDate: string,
+  albumName: string,
+  titles: string[],
+  albumId = `${platform}:${albumName}`,
+): PlaylistSongRow[] {
+  return titles.map((title, index) => row(String(startId + index), platform, publishDate, albumName, index + 1, title, 180 + index, albumId))
+}
+
 function row(
   id: string,
   platform: string,
@@ -412,6 +647,7 @@ function row(
   trackNo: number,
   title: string,
   duration = 180,
+  albumId = `${platform}:${albumName}`,
 ): PlaylistSongRow {
   return {
     id,
@@ -423,7 +659,7 @@ function row(
       platformSongId: id,
       title,
       artist: 'Singer',
-      albumId: `${platform}:${albumName}`,
+      albumId,
       albumName,
       duration,
       trackNo,

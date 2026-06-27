@@ -1,5 +1,6 @@
 import { buildAlbumFolderName, normalizeCompareText, readPublishDate } from './naming'
 import { PLATFORM_LABELS, PLATFORM_PRIORITY, type AlbumSongNode, type MergedAlbumInfo, type PlaylistSongRow, type Song } from './types'
+import { BALANCED_ALBUM_MERGE_REASON, shouldMergeBalancedAlbums, type AlbumMergeCandidate } from './albumMergeScorer'
 
 interface InternalAlbumNode {
   key: string
@@ -23,7 +24,8 @@ export function buildAlbumSongTreeModel(
   const grouped = new Map<string, InternalAlbumNode>()
   for (const row of rows) {
     const publishDate = readPublishDate(row.song.raw)
-    const key = `${row.song.platform}:${publishDate}:${normalizeCompareText(row.song.albumName)}`
+    const albumIdentity = row.song.albumId || normalizeCompareText(row.song.albumName)
+    const key = `${row.song.platform}:${publishDate}:${albumIdentity}:${normalizeCompareText(row.song.albumName)}`
     let node = grouped.get(key)
     if (!node) {
       node = {
@@ -113,14 +115,14 @@ function dedupeTotalAlbums(nodes: InternalAlbumNode[]): InternalAlbumNode[] {
 
   const byDate = new Map<string, InternalAlbumNode[]>()
   for (const node of kept) byDate.set(node.publishDate, [...(byDate.get(node.publishDate) || []), node])
-  return Array.from(byDate.values())
+  const dateWinners = Array.from(byDate.values())
     .flatMap((sameDate) => {
       const similarTrackWinners = mergeSameDateSimilarTrackAlbums(sameDate, SAME_DATE_SIMILAR_TRACK_REASON)
       return dedupeContainedAlbums(similarTrackWinners, {
         titleReason: '同日歌曲集合子集，保留歌曲数更多的专辑',
       })
     })
-    .sort(albumSort)
+  return mergeBalancedAlbumNodes(dateWinners).sort(albumSort)
 }
 
 function selectBestAlbum(nodes: InternalAlbumNode[]): InternalAlbumNode {
@@ -196,6 +198,64 @@ function mergeSameDateSimilarTrackAlbums(nodes: InternalAlbumNode[], reason: str
   }
 
   return nodes.filter((node) => !hidden.has(node))
+}
+
+function mergeBalancedAlbumNodes(nodes: InternalAlbumNode[]): InternalAlbumNode[] {
+  const groups = groupBalancedAlbumNodes(nodes)
+  const result: InternalAlbumNode[] = []
+  for (const group of groups) {
+    if (group.length === 1) {
+      result.push(group[0])
+      continue
+    }
+
+    const target = selectBestAlbum(group)
+    for (const node of group) {
+      if (node === target) continue
+      absorbAlbum(target, node, BALANCED_ALBUM_MERGE_REASON)
+    }
+    result.push(sortChildren(target))
+  }
+  return result
+}
+
+function groupBalancedAlbumNodes(nodes: InternalAlbumNode[]): InternalAlbumNode[][] {
+  const parent = nodes.map((_, index) => index)
+  const find = (index: number): number => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]]
+      index = parent[index]
+    }
+    return index
+  }
+  const union = (left: number, right: number): void => {
+    const leftRoot = find(left)
+    const rightRoot = find(right)
+    if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot
+  }
+
+  for (let left = 0; left < nodes.length; left += 1) {
+    for (let right = left + 1; right < nodes.length; right += 1) {
+      if (shouldMergeBalancedAlbums(toAlbumMergeCandidate(nodes[left]), toAlbumMergeCandidate(nodes[right]))) union(left, right)
+    }
+  }
+
+  const groups = new Map<number, InternalAlbumNode[]>()
+  nodes.forEach((node, index) => {
+    const root = find(index)
+    groups.set(root, [...(groups.get(root) || []), node])
+  })
+  return Array.from(groups.values())
+}
+
+function toAlbumMergeCandidate(node: InternalAlbumNode): AlbumMergeCandidate {
+  return {
+    platform: node.platform,
+    albumName: node.albumName,
+    publishDate: node.publishDate,
+    songCount: node.children.length,
+    songs: node.children.map((child) => child.song),
+  }
 }
 
 function dedupeContainedAlbums(nodes: InternalAlbumNode[], options: {
