@@ -22,6 +22,10 @@ const api = {
   removeAllDownloadTasks: () => ipcRenderer.invoke('download:removeAll'),
   listDownloadTasks: () => ipcRenderer.invoke('download:list'),
 
+  scanArtistFolders: (root: string) => ipcRenderer.invoke('folder:scan', root),
+  normalizeArtistFolders: (root: string, folderNames: string[]) => ipcRenderer.invoke('folder:normalize', { root, folderNames }),
+  openFolderPath: (targetPath: string) => ipcRenderer.invoke('folder:open', targetPath),
+
   scanFlacConversions: (sourceDir: string) => ipcRenderer.invoke('convert:scan', { sourceDir }),
   startFlacConversions: (payload: { sourceDir: string; bitrate: string; overwrite?: boolean }) => ipcRenderer.invoke('convert:start', payload),
   cancelFlacConversions: () => ipcRenderer.invoke('convert:cancel'),

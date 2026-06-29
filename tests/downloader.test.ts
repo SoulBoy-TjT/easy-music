@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DownloadManager } from '../src/main/core/downloadManager'
@@ -65,7 +65,7 @@ describe('download manager', () => {
     const [task] = store.listDownloadTasks()
     expect(firstUrlHit).toBe(1)
     expect(task.status).toBe('success')
-    expect(task.filePath).toContain("华晨宇（1首）\\2025-01-10 和平精英 (1首)\\01. 微光.flac")
+    expect(task.filePath).toContain("华晨宇\\2025-01-10 和平精英\\01. 微光.flac")
     expect(readFileSync(task.filePath).subarray(0, 4).toString('ascii')).toBe('fLaC')
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
@@ -111,7 +111,7 @@ describe('download manager', () => {
 
     const [task] = store.listDownloadTasks()
     expect(task.status).toBe('success')
-    expect(task.filePath).toContain("Singer（1首）\\2026-04-22 Kugou Album (1首)")
+    expect(task.filePath).toContain("Singer\\2026-04-22 Kugou Album\\01. Song.flac")
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
@@ -368,70 +368,7 @@ describe('download manager', () => {
     expect(task.filePath).toBe('')
     expect(task.downloaded).toBe(0)
     expect(task.total).toBe(0)
-    const artistDirs = existsSync(join(dir, 'downloads')) ? readdirSync(join(dir, 'downloads')) : []
-    expect(artistDirs.every((artistDir) => !existsSync(join(dir, 'downloads', artistDir, '2025-01-10 Album')))).toBe(true)
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
-
-  it('removes empty album folders left by failed downloads', async () => {
-    const server = http.createServer((_req, res) => {
-      res.setHeader('content-type', 'audio/flac')
-      res.end('encrypted-or-error-payload')
-    })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const port = (server.address() as any).port
-    const dir = mkdtempSync(join(tmpdir(), 'easy-music-'))
-    tempDirs.push(dir)
-    const store = new JsonStore(join(dir, 'state.json'))
-    store.createDownloadTask('playlist-1', 'Singer', song('kg', 'Song'), 'flac')
-    const manager = new DownloadManager(store, {
-      requestMusicUrl: async () => ({ url: `http://127.0.0.1:${port}/bad` }),
-      requestLyric: async () => null,
-      requestPic: async () => null,
-    }, join(dir, 'downloads'))
-
-    await manager.runPending()
-
-    const artistRoot = join(dir, 'downloads')
-    const albumDirs = existsSync(artistRoot)
-      ? readdirSync(artistRoot, { recursive: true, withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.includes('Album'))
-      : []
-    expect(albumDirs).toHaveLength(0)
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
-
-  it('marks existing invalid files in the batch artist folder as failed and removes them', async () => {
-    const server = http.createServer((_req, res) => {
-      res.setHeader('content-type', 'audio/flac')
-      res.end(FLAC_BYTES)
-    })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const port = (server.address() as any).port
-    const dir = mkdtempSync(join(tmpdir(), 'easy-music-'))
-    tempDirs.push(dir)
-    const downloadRoot = join(dir, 'downloads')
-    const invalidFile = join(downloadRoot, 'Singer', '2025-01-10 Album', '01. Bad.flac')
-    mkdirSync(join(downloadRoot, 'Singer', '2025-01-10 Album'), { recursive: true })
-    writeFileSync(invalidFile, 'encrypted-or-error-payload')
-    const store = new JsonStore(join(dir, 'state.json'))
-    const badTaskId = store.createDownloadTask('playlist-1', 'Singer', { ...song('kg', 'Bad'), id: 'kg:bad', platformSongId: 'bad' }, 'flac')
-    store.updateDownloadTask(badTaskId, { status: 'success', filePath: invalidFile, downloaded: 100, total: 100 })
-    store.createDownloadTask('playlist-1', 'Singer', { ...song('tx', 'Good'), id: 'tx:good', platformSongId: 'good', trackNo: 2 }, 'flac')
-    const manager = new DownloadManager(store, {
-      requestMusicUrl: async () => ({ url: `http://127.0.0.1:${port}/ok` }),
-      requestLyric: async () => null,
-      requestPic: async () => null,
-    }, downloadRoot)
-
-    await manager.runPending()
-
-    const tasks = store.listDownloadTasks()
-    const badTask = tasks.find((task) => task.id === badTaskId)!
-    const goodTask = tasks.find((task) => task.song.title === 'Good')!
-    expect(existsSync(invalidFile)).toBe(false)
-    expect(badTask.status).toBe('failed')
-    expect(badTask.filePath).toBe('')
-    expect(goodTask.status).toBe('success')
+    expect(existsSync(join(dir, 'downloads', 'Singer', '2025-01-10 Album', '01. Song.flac'))).toBe(false)
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
@@ -476,7 +413,7 @@ describe('download manager', () => {
     })
   })
 
-  it('renames album and artist folders with actual audio counts after the batch finishes', async () => {
+  it('keeps downloaded folders unrenamed until folder organizer is run manually', async () => {
     const server = http.createServer((_req, res) => {
       res.setHeader('content-type', 'audio/flac')
       res.end(FLAC_BYTES)
@@ -500,7 +437,7 @@ describe('download manager', () => {
 
     const [task] = store.listDownloadTasks()
     expect(task.status).toBe('success')
-    expect(task.filePath).toContain('Singer（1首）\\2025-01-10 Album (1首)\\01. Song.flac')
+    expect(task.filePath).toContain('Singer\\2025-01-10 Album\\01. Song.flac')
     expect(readFileSync(task.filePath).subarray(0, 4).toString('ascii')).toBe('fLaC')
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })

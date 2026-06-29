@@ -1,14 +1,42 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppServices } from '../src/main/appServices'
+import * as windowsExplorer from '../src/main/core/windowsExplorer'
 import type { Album, Song } from '../src/main/core/types'
 
 describe('app services download task creation', () => {
   const tempDirs: string[] = []
   afterEach(() => {
+    vi.restoreAllMocks()
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('scans and normalizes selected artist folders through the service', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'easy-music-service-'))
+    tempDirs.push(dir)
+    const service = new AppServices(dir)
+    const root = join(dir, 'downloads')
+    try {
+      writeFolderFile(join(root, 'Singer', 'Album', '01. Song.flac'), Buffer.from('fLaCminimal-audio-data'))
+      writeFolderFile(join(root, 'Singer', 'Album', 'cover.jpg'), 'cover')
+      const closeSpy = vi.spyOn(windowsExplorer, 'closeExplorerWindowsForPaths')
+        .mockReturnValue({ closedPaths: [join(root, 'Singer')], errors: [] })
+
+      const scanned = service.scanArtistFolders(root)
+      const normalized = service.normalizeArtistFolders(root, ['Singer'])
+
+      expect(scanned.items.map((item) => item.name)).toEqual(['Singer'])
+      expect(closeSpy).toHaveBeenNthCalledWith(1, [join(root, 'Singer')], { exactPaths: [root] })
+      expect(closeSpy).toHaveBeenNthCalledWith(2, [join(root, 'Singer', 'Album (1首)')], { exactPaths: [join(root, 'Singer')] })
+      expect(normalized.closedExplorerWindows).toEqual([join(root, 'Singer')])
+      expect(normalized.items[0]).toMatchObject({ originalName: 'Singer', songCount: 1, renamed: true })
+      expect(existsSync(join(root, 'Singer'))).toBe(false)
+      expect(existsSync(normalized.items[0].path)).toBe(true)
+    } finally {
+      service.close()
+    }
   })
 
   it('queues only visible deduped album songs when downloading all from the total playlist', () => {
@@ -333,4 +361,9 @@ function song(platform: string, title: string, publishDate: string, trackNo: num
     qualitys: ['flac'],
     raw: { publishDate, albumSongCount },
   }
+}
+
+function writeFolderFile(filePath: string, data: string | Buffer): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, data)
 }

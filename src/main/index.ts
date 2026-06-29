@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray, type OpenDialogOptions } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray, type OpenDialogOptions } from 'electron'
 import path from 'node:path'
 import { AppServices } from './appServices'
 
@@ -80,6 +80,13 @@ function registerIpc(service: AppServices): void {
   ipcMain.handle('download:remove', (_event, ids: string[]) => service.removeDownloadTasks(ids || []))
   ipcMain.handle('download:removeAll', () => service.removeAllDownloadTasks())
   ipcMain.handle('download:list', () => service.listDownloadTasks())
+
+  ipcMain.handle('folder:scan', (_event, root: string) => service.scanArtistFolders(root))
+  ipcMain.handle('folder:normalize', (_event, payload: { root: string; folderNames: string[] }) => service.normalizeArtistFolders(payload.root, payload.folderNames || []))
+  ipcMain.handle('folder:open', async (_event, targetPath: string) => {
+    if (!targetPath) return ''
+    return shell.openPath(targetPath)
+  })
 
   ipcMain.handle('convert:scan', (_event, payload: { sourceDir: string }) => service.scanFlacConversions(payload.sourceDir))
   ipcMain.handle('convert:start', (_event, payload: { sourceDir: string; bitrate: string; overwrite?: boolean }) => service.startFlacConversions(payload))

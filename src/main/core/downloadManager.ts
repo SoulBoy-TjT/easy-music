@@ -5,7 +5,6 @@ import https from 'node:https'
 import { extForQuality, readNumber, readPublishDate, resolveSongFilePath } from './naming'
 import { enhanceCoverUrl, writeMetadata } from './metadata'
 import { normalizeDownloadRequest } from './sourceBridge'
-import { applyPathRenames, normalizeDownloadedFoldersWithCleanup } from './folderCounts'
 import { validateDownloadedAudioFile as validateAudioFile } from './audioValidation'
 import { PLATFORM_LABELS, type CandidateSource, type DownloadRequest, type DownloadStore, type DownloadTask, type Platform, type Quality, type Song, type UrlResolver } from './types'
 
@@ -43,7 +42,6 @@ export class DownloadManager {
         if (!taskIds.length) return 0
         return taskIds.indexOf(left.id) - taskIds.indexOf(right.id)
       })
-    const batchArtistNames = Array.from(new Set(tasks.map((task) => task.playlistArtistName).filter(Boolean)))
     const workers = Array.from({ length: Math.max(1, this.maxConcurrent) }, async () => {
       while (tasks.length && !this.cancelled) {
         const task = tasks.shift()
@@ -51,7 +49,6 @@ export class DownloadManager {
       }
     })
     await Promise.all(workers)
-    this.normalizeBatchFolders(batchArtistNames)
   }
 
   private async runTask(task: DownloadTask): Promise<void> {
@@ -236,27 +233,6 @@ export class DownloadManager {
     }
   }
 
-  private normalizeBatchFolders(artistNames: string[]): void {
-    const result = normalizeDownloadedFoldersWithCleanup(this.downloadRoot, artistNames)
-    const invalidFiles = new Set(result.invalidFiles.map(normalizePath))
-    for (const task of this.store.listDownloadTasks()) {
-      if (!task.filePath) continue
-      if (invalidFiles.has(normalizePath(task.filePath))) {
-        this.store.updateDownloadTask(task.id, {
-          status: 'failed',
-          statusText: '下载失败',
-          speed: '',
-          downloaded: 0,
-          total: 0,
-          filePath: '',
-          error: '文件已下载但不是可播放音频，已删除坏文件',
-        })
-        continue
-      }
-      const filePath = applyPathRenames(task.filePath, result.renames)
-      if (filePath !== task.filePath) this.store.updateDownloadTask(task.id, { filePath })
-    }
-  }
 }
 
 export class DownloadHttpStatusError extends Error {
@@ -643,6 +619,3 @@ function readNestedRawString(raw: Record<string, unknown>, pathKeys: string[]): 
   return current == null ? '' : String(current)
 }
 
-function normalizePath(value: string): string {
-  return path.resolve(value).replace(/\//g, '\\').toLowerCase()
-}

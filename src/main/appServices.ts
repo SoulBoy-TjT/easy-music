@@ -1,11 +1,14 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { buildAlbumSongTreeModel } from './core/albumModel'
 import { DownloadManager } from './core/downloadManager'
 import { FlacConverter, type ConvertOptions, type ConvertResult, type ConvertTask } from './core/flacConverter'
+import { normalizeSelectedArtistFolders, scanArtistFolders, type ArtistFolderScanResult, type SelectedArtistFolderNormalizeResult } from './core/folderCounts'
 import { LibraryStore } from './core/libraryStore'
 import { LxSourceBridge } from './core/sourceBridge'
 import { fetchArtistPlatformAlbums, searchPlatformSongs, type FetchProgress, type ProgressCallback } from './platforms'
 import { PLATFORM_LABELS, type CandidateSource, type DownloadTask, type Platform, type Playlist, type PlaylistSongRow, type Quality, type Song, type UrlResolver } from './core/types'
+import * as windowsExplorer from './core/windowsExplorer'
 
 export interface PlaylistSummary extends Playlist {
   songCount: number
@@ -198,6 +201,41 @@ export class AppServices {
     return this.listDownloadTasks()
   }
 
+  scanArtistFolders(root: string): ArtistFolderScanResult {
+    return scanArtistFolders(root)
+  }
+
+  normalizeArtistFolders(root: string, folderNames: string[]): SelectedArtistFolderNormalizeResult & { closedExplorerWindows: string[]; closeExplorerWindowErrors: string[] } {
+    const selectedPaths = Array.from(new Set(folderNames.filter(Boolean).map((folderName) => path.join(root, folderName))))
+    const closeResult = windowsExplorer.closeExplorerWindowsForPaths(selectedPaths, { exactPaths: [root] })
+    const closedExplorerWindows = [...closeResult.closedPaths]
+    const closeExplorerWindowErrors = [...closeResult.errors]
+    try {
+      const result = normalizeSelectedArtistFolders(root, folderNames, {
+        beforeArtistRename: (artistDir) => {
+          const childDirs = collectChildDirectories(artistDir)
+          if (!childDirs.length) return
+          const childCloseResult = windowsExplorer.closeExplorerWindowsForPaths(childDirs, { exactPaths: [artistDir] })
+          closedExplorerWindows.push(...childCloseResult.closedPaths)
+          closeExplorerWindowErrors.push(...childCloseResult.errors)
+        },
+      })
+      return {
+        ...result,
+        closedExplorerWindows: Array.from(new Set(closedExplorerWindows)),
+        closeExplorerWindowErrors,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const details = [
+        message,
+        closedExplorerWindows.length ? `已关闭资源管理器：${Array.from(new Set(closedExplorerWindows)).join('；')}` : '已关闭资源管理器：0',
+        closeExplorerWindowErrors.length ? `关闭资源管理器错误：${closeExplorerWindowErrors.join('；')}` : '关闭资源管理器错误：无',
+      ]
+      throw new Error(details.join('\n'))
+    }
+  }
+
   scanFlacConversions(sourceDir: string): ConvertTask[] {
     return this.flacConverter.scan(sourceDir)
   }
@@ -371,6 +409,17 @@ function shortScriptId(script: string): string {
     hash = ((hash << 5) - hash + script.charCodeAt(index)) | 0
   }
   return Math.abs(hash).toString(36).slice(0, 6)
+}
+
+function collectChildDirectories(root: string): string[] {
+  if (!fs.existsSync(root)) return []
+  const result: string[] = []
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const fullPath = path.join(root, entry.name)
+    result.push(fullPath, ...collectChildDirectories(fullPath))
+  }
+  return result
 }
 
 export type { FetchProgress }

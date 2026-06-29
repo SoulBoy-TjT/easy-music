@@ -638,9 +638,14 @@ progress::-webkit-progress-value {
 }
 
 .download-pane,
+.folder-pane,
 .source-pane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.folder-pane {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .converter-pane {
@@ -696,6 +701,19 @@ progress::-webkit-progress-value {
 
 .task-wrap .task-error-cell {
   cursor: pointer;
+}
+
+.folder-wrap .task-error-cell {
+  color: var(--text);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.folder-warning-text {
+  display: block;
+  margin-top: 4px;
+  color: var(--danger);
+  word-break: break-word;
 }
 
 .task-error-cell:empty::after {
@@ -779,6 +797,84 @@ progress::-webkit-progress-value {
 
 .source-actions {
   flex: 0 0 auto;
+}
+
+.folder-form {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(180px, 280px);
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.folder-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.folder-form label:has(button) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.folder-form label:has(button) span {
+  grid-column: 1 / -1;
+}
+
+.folder-form label.compact-label {
+  display: inline-flex;
+  align-self: center;
+  gap: 6px;
+  padding-top: 18px;
+}
+
+.folder-form .path-input {
+  width: 100%;
+}
+
+.folder-message {
+  align-self: center;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-detail-log {
+  max-height: 150px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.folder-wrap th:nth-child(2),
+.folder-wrap td:nth-child(2) {
+  width: 86px;
+}
+
+.folder-wrap th:nth-child(5),
+.folder-wrap td:nth-child(5) {
+  width: 136px;
+}
+
+.folder-actions {
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .converter-form {

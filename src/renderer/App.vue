@@ -90,13 +90,43 @@ interface ConvertResult {
   tasks: ConvertTask[]
 }
 
+interface ArtistFolderItem {
+  name: string
+  path: string
+  artistName: string
+  songCount: number
+  targetName: string
+  targetPath: string
+  needsRename: boolean
+  warnings: string[]
+  originalName?: string
+  originalPath?: string
+  renamed?: boolean
+}
+
+interface ArtistFolderScanResult {
+  root: string
+  items: ArtistFolderItem[]
+}
+
+interface ArtistFolderNormalizeResult {
+  root: string
+  items: ArtistFolderItem[]
+  renames: Array<{ from: string; to: string }>
+  invalidFiles: string[]
+  deletedDirs: string[]
+  removedFiles: string[]
+  closedExplorerWindows: string[]
+  closeExplorerWindowErrors: string[]
+}
+
 interface MenuItem {
   label: string
   action: () => void | Promise<void>
   danger?: boolean
 }
 
-type PageKey = 'albums' | 'downloads' | 'sources' | 'converter'
+type PageKey = 'albums' | 'downloads' | 'folders' | 'sources' | 'converter'
 
 const artistName = ref('')
 const playlists = ref<PlaylistSummary[]>([])
@@ -105,6 +135,7 @@ const albums = ref<AlbumNode[]>([])
 const tasks = ref<DownloadTask[]>([])
 const sources = ref<SourceInfo[]>([])
 const convertTasks = ref<ConvertTask[]>([])
+const folderItems = ref<ArtistFolderItem[]>([])
 const selectedPlaylistId = ref('')
 const selectedPlaylist = computed(() => playlists.value.find((item) => item.id === selectedPlaylistId.value) || null)
 const expandedArtists = ref(new Set<string>())
@@ -115,6 +146,10 @@ const maxConcurrent = ref('3')
 const showFailedOnly = ref(false)
 const retryingFailedTaskIds = ref(new Set<string>())
 const activePage = ref<PageKey>('albums')
+const folderRoot = ref('')
+const folderBusy = ref(false)
+const folderMessage = ref('')
+const folderDetailLines = ref<string[]>([])
 const convertSourceDir = ref('')
 const convertOutputDir = ref('')
 const convertBitrate = ref('320k')
@@ -185,6 +220,7 @@ async function loadSettings() {
   maxConcurrent.value = await window.easyMusic.getSetting('maxConcurrent', '3')
   songViewMode.value = await window.easyMusic.getSetting('songViewMode', 'flat') as 'flat' | 'album'
   activePage.value = await window.easyMusic.getSetting('activePage', 'albums') as PageKey
+  folderRoot.value = await window.easyMusic.getSetting('folderRoot', '') || downloadRoot.value
   convertSourceDir.value = await window.easyMusic.getSetting('convertSourceDir', '')
   convertBitrate.value = await window.easyMusic.getSetting('convertBitrate', '320k')
   convertOverwrite.value = await window.easyMusic.getSetting('convertOverwrite', 'false') === 'true'
@@ -196,6 +232,7 @@ async function refreshAll() {
   sources.value = await window.easyMusic.listSources()
   convertTasks.value = await window.easyMusic.listFlacConversions()
   await refreshConvertResult()
+  if (activePage.value === 'folders' && folderRoot.value) await scanFolders()
   if (selectedPlaylistId.value) await selectPlaylist(selectedPlaylistId.value)
 }
 
@@ -208,6 +245,10 @@ async function switchPage(page: PageKey) {
   activePage.value = page
   await saveSetting('activePage', page)
   if (page === 'downloads') setDownloadTasks(await window.easyMusic.listDownloadTasks())
+  if (page === 'folders') {
+    if (!folderRoot.value && downloadRoot.value) folderRoot.value = downloadRoot.value
+    if (folderRoot.value) await scanFolders()
+  }
   if (page === 'sources') sources.value = await window.easyMusic.listSources()
   if (page === 'converter') await refreshConvertResult()
 }
@@ -358,6 +399,116 @@ async function chooseConvertSourceDir() {
   if (!selected) return
   convertSourceDir.value = selected
   await saveSetting('convertSourceDir', selected)
+}
+
+async function chooseFolderRoot() {
+  const selected = await window.easyMusic.chooseDirectory('选择要整理的父目录')
+  if (!selected) return
+  folderRoot.value = selected
+  await saveSetting('folderRoot', selected)
+  await scanFolders()
+}
+
+async function scanFolders() {
+  const root = folderRoot.value.trim()
+  folderDetailLines.value = []
+  if (!root) {
+    folderItems.value = []
+    folderMessage.value = '请选择要整理的父目录'
+    return
+  }
+  folderBusy.value = true
+  try {
+    const result = await window.easyMusic.scanArtistFolders(root) as ArtistFolderScanResult
+    folderItems.value = result.items
+    folderMessage.value = result.items.length ? `识别到 ${result.items.length} 个歌手文件夹` : '未识别到包含 FLAC 或 MP3 的歌手文件夹'
+  } catch (error) {
+    folderMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    folderBusy.value = false
+  }
+}
+
+async function normalizeFolder(item: ArtistFolderItem) {
+  const root = folderRoot.value.trim()
+  if (!root) return
+  if (!confirm(`整理歌手文件夹“${item.name}”？会自动关闭父目录窗口、该歌手目录及其子目录打开的资源管理器窗口，清理非 FLAC/MP3 文件，并按实际歌曲数重命名。`)) return
+  folderBusy.value = true
+  folderDetailLines.value = [
+    '准备整理',
+    `父目录：${root}`,
+    `歌手文件夹：${item.name}`,
+    `当前路径：${item.path}`,
+    `目标名称：${item.targetName}`,
+    '资源管理器：正在尝试关闭父目录窗口、该歌手目录及其子目录窗口',
+  ]
+  try {
+    const result = await window.easyMusic.normalizeArtistFolders(root, [item.name]) as ArtistFolderNormalizeResult
+    await scanFolders()
+    const warningCount = result.items.reduce((count, item) => count + item.warnings.length, 0)
+    folderMessage.value = `已整理 ${result.items.length} 个歌手文件夹，清理 ${result.removedFiles.length} 个非音频文件${warningCount ? `，发现 ${warningCount} 条排序提示` : ''}`
+    folderDetailLines.value = buildFolderNormalizeLines(item, result)
+  } catch (error) {
+    const message = normalizeFolderErrorMessage(error)
+    folderMessage.value = `整理失败：${message.split(/\r?\n/)[0] || '未知错误'}`
+    folderDetailLines.value = [
+      '整理失败',
+      `父目录：${root}`,
+      `歌手文件夹：${item.name}`,
+      `当前路径：${item.path}`,
+      `目标名称：${item.targetName}`,
+      '错误详情：',
+      ...message.split(/\r?\n/).filter(Boolean),
+      '提示：如果是 EPERM、EBUSY 或文件被占用，请先关闭正在播放/预览该目录的程序后重试。',
+    ]
+  } finally {
+    folderBusy.value = false
+  }
+}
+
+function buildFolderNormalizeLines(source: ArtistFolderItem, result: ArtistFolderNormalizeResult): string[] {
+  const normalized = result.items[0]
+  const warnings = result.items.flatMap((item) => item.warnings)
+  return [
+    '整理完成',
+    `父目录：${result.root}`,
+    `原歌手文件夹：${source.name}`,
+    `当前名称：${normalized?.name || source.name}`,
+    `当前路径：${normalized?.path || source.path}`,
+    `重命名：${formatRenameSummary(result.renames)}`,
+    `关闭资源管理器：${formatPathSummary(result.closedExplorerWindows || [])}`,
+    `关闭资源管理器错误：${(result.closeExplorerWindowErrors || []).length ? result.closeExplorerWindowErrors.join('；') : '无'}`,
+    `清理非 FLAC/MP3：${formatPathSummary(result.removedFiles)}`,
+    `删除坏音频：${formatPathSummary(result.invalidFiles)}`,
+    `删除空目录：${formatPathSummary(result.deletedDirs)}`,
+    warnings.length ? `排序提示：${warnings.join('；')}` : '排序提示：无',
+  ]
+}
+
+function formatRenameSummary(renames: Array<{ from: string; to: string }>): string {
+  if (!renames.length) return '0'
+  const shown = renames.slice(0, 5).map((rename) => `${rename.from} -> ${rename.to}`)
+  return `${renames.length} 个：${shown.join('；')}${renames.length > shown.length ? `；另 ${renames.length - shown.length} 个` : ''}`
+}
+
+function formatPathSummary(paths: string[]): string {
+  if (!paths.length) return '0'
+  const shown = paths.slice(0, 8)
+  return `${paths.length} 个：${shown.join('；')}${paths.length > shown.length ? `；另 ${paths.length - shown.length} 个` : ''}`
+}
+
+function normalizeFolderErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  return raw
+    .replace(/^Error invoking remote method '[^']+':\s*/u, '')
+    .replace(/^Error:\s*/u, '')
+    .trim() || raw || '未知错误'
+}
+
+async function openFolder(targetPath: string) {
+  if (!targetPath) return
+  const error = await window.easyMusic.openFolderPath(targetPath)
+  if (error) alert(error)
 }
 
 async function startFlacConversions() {
@@ -539,6 +690,20 @@ function formatBytes(value: number): string {
   return `${value} B`
 }
 
+function folderStatus(item: ArtistFolderItem): string {
+  if (item.warnings.length) return '需检查'
+  return item.needsRename ? '待整理' : '已整理'
+}
+
+function folderStatusClass(item: ArtistFolderItem): string {
+  if (item.warnings.length) return 'is-failed'
+  return item.needsRename ? 'is-pending' : 'is-complete'
+}
+
+function folderWarningText(item: ArtistFolderItem): string {
+  return item.warnings.length ? item.warnings.join('\n') : ''
+}
+
 function statusClass(status: string): string {
   const normalized = status.toLowerCase()
   if (normalized.includes('fail') || normalized.includes('error')) return 'is-failed'
@@ -554,6 +719,7 @@ function statusClass(status: string): string {
     <nav class="page-nav">
       <button :class="{ active: activePage === 'albums' }" @click="switchPage('albums')">专辑下载</button>
       <button :class="{ active: activePage === 'downloads' }" @click="switchPage('downloads')">下载任务</button>
+      <button :class="{ active: activePage === 'folders' }" @click="switchPage('folders')">文件夹整理</button>
       <button :class="{ active: activePage === 'sources' }" @click="switchPage('sources')">音乐源管理</button>
       <button :class="{ active: activePage === 'converter' }" @click="switchPage('converter')">FLAC 转 MP3</button>
     </nav>
@@ -736,6 +902,65 @@ function statusClass(status: string): string {
                   <div class="empty-state empty-state--table">
                     <strong>暂无任务</strong>
                     <span>{{ emptyVisibleTasksMessage }}</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section v-else-if="activePage === 'folders'" class="page-pane">
+      <div class="folder-pane page-card">
+        <div class="pane-header">
+          <span>文件夹整理</span>
+          <div class="pane-actions">
+            <button :disabled="folderBusy || !folderRoot" @click="scanFolders">扫描</button>
+            <button :disabled="!folderRoot" @click="openFolder(folderRoot)">打开目录</button>
+          </div>
+        </div>
+        <div class="folder-form">
+          <label>
+            <span>父目录</span>
+            <input v-model="folderRoot" class="text-input path-input" readonly />
+            <button @click="chooseFolderRoot">选择</button>
+          </label>
+          <div class="folder-message">{{ folderMessage || '扫描后可在每行执行整理或打开目录' }}</div>
+        </div>
+        <pre v-if="folderDetailLines.length" class="folder-detail-log">{{ folderDetailLines.join('\n') }}</pre>
+        <div class="table-wrap folder-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>歌手文件夹</th>
+                <th>歌曲数</th>
+                <th>目标名称</th>
+                <th>状态 / 提示</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-if="folderItems.length">
+              <tr v-for="item in folderItems" :key="item.path" :class="{ 'is-failed-row': item.warnings.length }">
+                <td :title="item.path">{{ item.name }}</td>
+                <td>{{ item.songCount }}</td>
+                <td :title="item.targetPath">{{ item.targetName }}</td>
+                <td class="task-error-cell" :title="folderWarningText(item)">
+                  <span class="status-pill" :class="folderStatusClass(item)">{{ folderStatus(item) }}</span>
+                  <span v-if="item.warnings.length" class="folder-warning-text">{{ item.warnings.join('；') }}</span>
+                </td>
+                <td class="folder-actions">
+                  <button :disabled="folderBusy" @click="normalizeFolder(item)">整理</button>
+                  <button @click="openFolder(item.path)">打开</button>
+                </td>
+              </tr>
+              </template>
+              <tr v-else class="empty-table-row">
+                <td colspan="5">
+                  <div class="empty-state empty-state--table">
+                    <strong>暂无歌手文件夹</strong>
+                    <span>选择父目录后扫描。</span>
                   </div>
                 </td>
               </tr>
